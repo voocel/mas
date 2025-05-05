@@ -5,11 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/voocel/mas/communication"
-
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/voocel/mas/agent"
+	"github.com/voocel/mas/communication"
 )
 
 type Task struct {
@@ -31,17 +30,17 @@ type Task struct {
 type TaskStatus string
 
 const (
-	// TaskStatusPending 待处理
+	// TaskStatusPending pending
 	TaskStatusPending TaskStatus = "pending"
-	// TaskStatusRunning 运行中
+	// TaskStatusRunning running
 	TaskStatusRunning TaskStatus = "running"
-	// TaskStatusPaused 已暂停
+	// TaskStatusPaused paused
 	TaskStatusPaused TaskStatus = "paused"
-	// TaskStatusCompleted 已完成
+	// TaskStatusCompleted completed
 	TaskStatusCompleted TaskStatus = "completed"
-	// TaskStatusFailed 失败
+	// TaskStatusFailed failed
 	TaskStatusFailed TaskStatus = "failed"
-	// TaskStatusCancelled 已取消
+	// TaskStatusCancelled cancelled
 	TaskStatusCancelled TaskStatus = "cancelled"
 )
 
@@ -51,34 +50,34 @@ type Options struct {
 	PollInterval time.Duration
 }
 
-// Orchestrator 定义了多智能体系统的编排器
+// Orchestrator defines an orchestrator for multi-agent systems
 type Orchestrator interface {
-	// RegisterAgent 注册一个智能体
+	// RegisterAgent registers an agent
 	RegisterAgent(agent agent.Agent) error
 
-	// GetAgent 获取指定ID的智能体
+	// GetAgent gets an agent by ID
 	GetAgent(id string) (agent.Agent, error)
 
-	// ListAgents 列出所有注册的智能体
+	// ListAgents lists all registered agents
 	ListAgents() []agent.Agent
 
-	// SubmitTask 提交一个任务
+	// SubmitTask submits a task
 	SubmitTask(ctx context.Context, task Task) (string, error)
 
-	// GetTask 获取指定ID的任务信息
+	// GetTask gets task information by ID
 	GetTask(id string) (Task, error)
 
-	// CancelTask 取消一个任务
+	// CancelTask cancels a task
 	CancelTask(ctx context.Context, id string) error
 
-	// Start 启动编排器
+	// Start starts the orchestrator
 	Start() error
 
-	// Stop 停止编排器
+	// Stop stops the orchestrator
 	Stop() error
 }
 
-// BasicOrchestrator 实现了基础的编排器功能
+// BasicOrchestrator implements basic orchestrator functionality
 type BasicOrchestrator struct {
 	agents    map[string]agent.Agent
 	tasks     map[string]Task
@@ -91,7 +90,7 @@ type BasicOrchestrator struct {
 	mu        sync.RWMutex
 }
 
-// NewBasicOrchestrator 创建一个新的基础编排器
+// NewBasicOrchestrator creates a new basic orchestrator
 func NewBasicOrchestrator(opts Options) *BasicOrchestrator {
 	ttl := 1 * time.Hour
 	if opts.DefaultTTL > 0 {
@@ -118,18 +117,18 @@ func NewBasicOrchestrator(opts Options) *BasicOrchestrator {
 	}
 }
 
-// RegisterAgent 注册一个智能体
+// RegisterAgent registers an agent
 func (o *BasicOrchestrator) RegisterAgent(a agent.Agent) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	// 使用智能体的名称作为ID
+	// Use the agent's name as ID
 	agentID := a.Name()
 	o.agents[agentID] = a
 	return nil
 }
 
-// GetAgent 获取指定ID的智能体
+// GetAgent gets an agent by ID
 func (o *BasicOrchestrator) GetAgent(id string) (agent.Agent, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -142,7 +141,7 @@ func (o *BasicOrchestrator) GetAgent(id string) (agent.Agent, error) {
 	return a, nil
 }
 
-// ListAgents 列出所有注册的智能体
+// ListAgents lists all registered agents
 func (o *BasicOrchestrator) ListAgents() []agent.Agent {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -155,7 +154,7 @@ func (o *BasicOrchestrator) ListAgents() []agent.Agent {
 	return agents
 }
 
-// SubmitTask 提交一个任务
+// SubmitTask submits a task
 func (o *BasicOrchestrator) SubmitTask(ctx context.Context, task Task) (string, error) {
 	if !o.running {
 		return "", errors.New("orchestrator not running")
@@ -181,13 +180,13 @@ func (o *BasicOrchestrator) SubmitTask(ctx context.Context, task Task) (string, 
 
 	o.tasks[task.ID] = task
 
-	// 启动异步处理任务
+	// Start asynchronous task processing
 	go o.processTask(task.ID)
 
 	return task.ID, nil
 }
 
-// GetTask 获取指定ID的任务信息
+// GetTask gets task information by ID
 func (o *BasicOrchestrator) GetTask(id string) (Task, error) {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -200,7 +199,7 @@ func (o *BasicOrchestrator) GetTask(id string) (Task, error) {
 	return task, nil
 }
 
-// CancelTask 取消一个任务
+// CancelTask cancels a task
 func (o *BasicOrchestrator) CancelTask(ctx context.Context, id string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -221,7 +220,7 @@ func (o *BasicOrchestrator) CancelTask(ctx context.Context, id string) error {
 	return nil
 }
 
-// Start 启动编排器
+// Start starts the orchestrator
 func (o *BasicOrchestrator) Start() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -235,7 +234,7 @@ func (o *BasicOrchestrator) Start() error {
 	return nil
 }
 
-// Stop 停止编排器
+// Stop stops the orchestrator
 func (o *BasicOrchestrator) Stop() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -250,7 +249,7 @@ func (o *BasicOrchestrator) Stop() error {
 	return nil
 }
 
-// processTask 异步处理任务
+// processTask processes task asynchronously
 func (o *BasicOrchestrator) processTask(taskID string) {
 	o.mu.Lock()
 	task, ok := o.tasks[taskID]
@@ -259,7 +258,7 @@ func (o *BasicOrchestrator) processTask(taskID string) {
 		return
 	}
 
-	// 更新任务状态为运行中
+	// Update task status to running
 	now := time.Now()
 	task.Status = TaskStatusRunning
 	task.UpdatedAt = now
@@ -270,11 +269,11 @@ func (o *BasicOrchestrator) processTask(taskID string) {
 	ctx, cancel := context.WithTimeout(o.ctx, o.ttl)
 	defer cancel()
 
-	// todo 需要更复杂的协作逻辑
+	// todo need more complex collaboration logic
 	var result interface{}
 	var taskErr error
 
-	// 顺序执行每个智能体的处理
+	// Process with each agent sequentially
 	for _, agentID := range task.AgentIDs {
 		o.mu.RLock()
 		agent, ok := o.agents[agentID]

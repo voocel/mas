@@ -23,12 +23,12 @@ func NewOpenAIProvider(config Config) (Provider, error) {
 		return nil, ErrAPIKeyNotSet
 	}
 
-	baseURL := "https://api.openai.com/v1"
+	baseURL := "https://one.wisehood.ai/v1"
 	if config.BaseURL != "" {
 		baseURL = config.BaseURL
 	}
 
-	defaultModel := "gpt-4o"
+	defaultModel := "gpt-4.1-mini"
 	if config.DefaultModel != "" {
 		defaultModel = config.DefaultModel
 	}
@@ -60,38 +60,58 @@ func (p *OpenAIProvider) ChatCompletion(ctx context.Context, req ChatCompletionR
 
 	reqURL := fmt.Sprintf("%s/chat/completions", p.baseURL)
 
+	// Check if agent name exists in extra information
+	agentName := "Unknown Agent"
+	if req.Extra != nil {
+		if name, ok := req.Extra["agent_name"].(string); ok && name != "" {
+			agentName = name
+		}
+	}
+
+	fmt.Printf("Agent[%s] sending request to OpenAI: model=%s\n", agentName, req.Model)
+
 	reqBody, err := json.Marshal(req)
 	if err != nil {
+		fmt.Printf("Agent[%s] failed to serialize request body: %v\n", agentName, err)
 		return nil, ErrRequestFailed.WithDetails(err.Error())
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", reqURL, bytes.NewBuffer(reqBody))
 	if err != nil {
+		fmt.Printf("Agent[%s] failed to create HTTP request: %v\n", agentName, err)
 		return nil, ErrRequestFailed.WithDetails(err.Error())
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.apiKey))
 
+	fmt.Println("Sending request...")
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
+		fmt.Printf("Agent[%s] HTTP request failed: %v\n", agentName, err)
 		return nil, ErrRequestFailed.WithDetails(err.Error())
 	}
 	defer resp.Body.Close()
+	fmt.Printf("Response received: status code=%d\n", resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		fmt.Printf("Agent[%s] failed to read response body: %v\n", agentName, err)
 		return nil, ErrResponseInvalid.WithDetails(err.Error())
 	}
+	fmt.Println("Response data received")
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, ErrRequestFailed.WithDetails(fmt.Sprintf("status code: %d, body: %s", resp.StatusCode, string(body)))
+		fmt.Printf("Agent[%s] API response error: status code=%d\n", agentName, resp.StatusCode)
+		return nil, ErrRequestFailed.WithDetails(fmt.Sprintf("status code: %d", resp.StatusCode))
 	}
 
 	var result ChatCompletionResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		fmt.Printf("Agent[%s] failed to parse response JSON: %v\n", agentName, err)
 		return nil, ErrResponseInvalid.WithDetails(err.Error())
 	}
+	fmt.Printf("Agent[%s] successfully parsed response: %s\n", agentName, result.Choices[0].Message.Content)
 
 	return &result, nil
 }
@@ -148,4 +168,12 @@ func init() {
 	factory.Register("openai", func(config Config) (Provider, error) {
 		return NewOpenAIProvider(config)
 	})
+}
+
+// Helper function min gets the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

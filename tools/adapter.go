@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// ToolAdapter adapts various custom tools to the framework's Tool interface
+// ToolAdapter provides a way to adapt different tool implementations to the standard Tool interface
 type ToolAdapter struct {
 	name         string
 	description  string
@@ -15,7 +15,7 @@ type ToolAdapter struct {
 }
 
 // NewToolAdapter creates a new tool adapter
-func NewToolAdapter(name, description string, schema json.RawMessage, tool interface{}) *ToolAdapter {
+func NewToolAdapter(name, description string, schema json.RawMessage, tool interface{}) Tool {
 	return &ToolAdapter{
 		name:         name,
 		description:  description,
@@ -46,51 +46,34 @@ func (a *ToolAdapter) Description() string {
 	return a.description
 }
 
-// ParameterSchema returns the tool's parameter schema
-func (a *ToolAdapter) ParameterSchema() json.RawMessage {
-	if t, ok := a.internalTool.(interface{ ParameterSchema() json.RawMessage }); ok {
-		return t.ParameterSchema()
-	}
+// Schema returns the tool parameter schema
+func (a *ToolAdapter) Schema() json.RawMessage {
 	if t, ok := a.internalTool.(interface{ Schema() json.RawMessage }); ok {
 		return t.Schema()
 	}
 	return a.schema
 }
 
-// Execute runs the tool
-func (a *ToolAdapter) Execute(ctx context.Context, params json.RawMessage) (interface{}, error) {
+// Execute executes the tool
+func (a *ToolAdapter) Execute(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+	// Try to use the new interface directly
 	if t, ok := a.internalTool.(interface {
-		Execute(context.Context, json.RawMessage) (interface{}, error)
+		Execute(context.Context, map[string]interface{}) (interface{}, error)
 	}); ok {
 		return t.Execute(ctx, params)
 	}
 
-	var paramMap map[string]interface{}
-	if err := json.Unmarshal(params, &paramMap); err != nil {
-		return nil, fmt.Errorf("failed to parse parameters: %w", err)
-	}
-
+	// Try to call custom method
 	if t, ok := a.internalTool.(interface {
-		Execute(context.Context, map[string]interface{}) (interface{}, error)
+		Run(context.Context, map[string]interface{}) (interface{}, error)
 	}); ok {
-		return t.Execute(ctx, paramMap)
+		return t.Run(ctx, params)
 	}
 
-		return nil, fmt.Errorf("unsupported tool type")
-}
+	// Try to call function-style tool
+	if fn, ok := a.internalTool.(func(context.Context, map[string]interface{}) (interface{}, error)); ok {
+		return fn(ctx, params)
+	}
 
-// AdaptTool is a convenience method to adapt custom tools to the framework's standard Tool interface
-func AdaptTool(name, description string, tool interface{}) Tool {
-	defaultSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"query": {
-				"type": "string",
-				"description": "query parameter"
-			}
-		},
-		"required": ["query"]
-	}`)
-
-	return NewToolAdapter(name, description, defaultSchema, tool)
+	return nil, fmt.Errorf("unsupported tool type")
 }

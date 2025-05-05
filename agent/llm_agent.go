@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -99,7 +100,12 @@ func (a *LLMAgent) Think(ctx context.Context) error {
 	// Prepare prompt
 	prompt := a.preparePrompt()
 
+	log.Printf("Agent[%s] starting thinking phase", a.Name())
+
 	// Call LLM for thinking
+	log.Printf("Agent[%s] sending request to %s: model=%s", a.Name(), a.provider.ID(), a.GetModelName())
+	log.Printf("Sending request...")
+
 	resp, err := a.provider.ChatCompletion(ctx, llm.ChatCompletionRequest{
 		Messages: []llm.Message{
 			{Role: "system", Content: a.systemPrompt},
@@ -107,14 +113,24 @@ func (a *LLMAgent) Think(ctx context.Context) error {
 		},
 		Temperature: a.temperature,
 		MaxTokens:   a.maxTokens,
+		Extra: map[string]interface{}{
+			"agent_name": a.Name(),
+		},
 	})
 	if err != nil {
+		log.Printf("Agent[%s] request failed: %v", a.Name(), err)
 		return fmt.Errorf("LLM call failed: %w", err)
 	}
+
+	log.Printf("Response received: status code=%d", 200) // Assuming status code is 200, may need to get from return value
+	log.Printf("Response data received")
 
 	// Extract thinking result
 	if len(resp.Choices) > 0 {
 		a.currentThought = resp.Choices[0].Message.Content
+		log.Printf("Agent[%s] successfully parsed response: %s", a.Name(), truncateString(a.currentThought, 100))
+	} else {
+		log.Printf("Agent[%s] response has no choice results", a.Name())
 	}
 
 	// Add thinking result to memory
@@ -134,15 +150,38 @@ func (a *LLMAgent) Think(ctx context.Context) error {
 	return nil
 }
 
+// GetModelName returns the current model name being used
+func (a *LLMAgent) GetModelName() string {
+	// Here we need to get the model name from the Provider, since the interface might not provide it, returning a mock value
+	// Ideally, this should be obtained from the Provider
+	return "gpt-4o"
+}
+
+// Function to truncate string, used for truncating long content in log output
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 // Act executes decisions and returns results in the action phase
 func (a *LLMAgent) Act(ctx context.Context) (interface{}, error) {
 	// Check if thinking result contains tool call
+	fmt.Println("========11111=========")
+	fmt.Println(a.currentThought)
+	fmt.Println("========11111=========")
 	if isToolCall(a.currentThought) {
+		log.Printf("Agent[%s] detected tool call intent, parsing tool call", a.Name())
+
 		// Parse tool call
 		toolName, params, err := parseToolCall(a.currentThought)
 		if err != nil {
+			log.Printf("Agent[%s] failed to parse tool call: %v", a.Name(), err)
 			return nil, fmt.Errorf("failed to parse tool call: %w", err)
 		}
+
+		log.Printf("Agent[%s] successfully parsed tool call: tool=%s, params=%+v", a.Name(), toolName, params)
 
 		// Call tool
 		result, err := a.callTool(ctx, toolName, params)
@@ -152,26 +191,40 @@ func (a *LLMAgent) Act(ctx context.Context) (interface{}, error) {
 
 		// Add tool call result to memory
 		if a.memory != nil {
-		err := a.memory.Add(ctx, memory.MemoryItem{
-			ID:        uuid.New().String(),
-			Content:   result,
-			Type:      memory.TypeAction,
-			CreatedAt: time.Now(),
-			Metadata: map[string]interface{}{
-				"tool":   toolName,
-				"params": params,
-			},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to add tool call result to memory: %w", err)
+			err := a.memory.Add(ctx, memory.MemoryItem{
+				ID:        uuid.New().String(),
+				Content:   result,
+				Type:      memory.TypeAction,
+				CreatedAt: time.Now(),
+				Metadata: map[string]interface{}{
+					"tool":   toolName,
+					"params": params,
+				},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to add tool call result to memory: %w", err)
+			}
 		}
+
+		return result, nil
 	}
 
-	return result, nil
+	// If no tool call, return thinking result directly
+	log.Printf("Agent[%s] did not detect tool call, returning thinking result directly", a.Name())
+	return a.currentThought, nil
 }
 
-// If no tool call, return thinking result directly
-return a.currentThought, nil
+// Process executes the full perceive-think-act cycle
+func (a *LLMAgent) Process(ctx context.Context, input interface{}) (interface{}, error) {
+	if err := a.Perceive(ctx, input); err != nil {
+		return nil, err
+	}
+
+	if err := a.Think(ctx); err != nil {
+		return nil, err
+	}
+
+	return a.Act(ctx)
 }
 
 // preparePrompt prepares the prompt
@@ -265,11 +318,13 @@ func parseToolCall(text string) (string, map[string]interface{}, error) {
 	// Parse parameters JSON
 	var params map[string]interface{}
 	if paramsStr != "" {
+		log.Printf("Parsing tool parameter JSON: %s", paramsStr)
 		if err := json.Unmarshal([]byte(paramsStr), &params); err != nil {
 			return toolName, nil, fmt.Errorf("failed to parse parameters: %w", err)
 		}
 	} else {
 		params = make(map[string]interface{})
+		log.Printf("No tool parameters provided, using empty parameters")
 	}
 
 	return toolName, params, nil
@@ -290,17 +345,18 @@ func (a *LLMAgent) callTool(ctx context.Context, toolName string, params map[str
 		return nil, fmt.Errorf("tool not found: %s", toolName)
 	}
 
-	// Convert parameters to JSON
-	paramsJSON, err := json.Marshal(params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize parameters: %w", err)
-	}
+	// Add tool call log
+	log.Printf("Agent[%s] calling tool: %s, params: %+v", a.Name(), toolName, params)
 
-	// Execute tool
-	result, err := selectedTool.Execute(ctx, paramsJSON)
+	// Execute tool directly with parameter map
+	result, err := selectedTool.Execute(ctx, params)
 	if err != nil {
+		log.Printf("Agent[%s] failed to call tool[%s]: %v", a.Name(), toolName, err)
 		return nil, fmt.Errorf("tool execution failed: %w", err)
 	}
+
+	// Add tool call result log
+	log.Printf("Agent[%s] called tool[%s] successfully: %v", a.Name(), toolName, result)
 
 	return result, nil
 }

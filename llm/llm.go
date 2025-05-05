@@ -41,7 +41,7 @@ type ChatCompletionRequest struct {
 	MaxTokens   int                    `json:"max_tokens,omitempty"`
 	TopP        float64                `json:"top_p,omitempty"`
 	Stop        []string               `json:"stop,omitempty"`
-	Extra       map[string]interface{} `json:"extra,omitempty"`
+	Extra       map[string]interface{} `json:"-"`
 }
 
 type Provider interface {

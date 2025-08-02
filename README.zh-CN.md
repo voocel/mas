@@ -317,7 +317,7 @@ go test ./...
 
 ## 许可证
 
-MIT许可证 - 详见 [LICENSE](LICENSE) 文件。
+Apache License 2.0 - 详见 [LICENSE](LICENSE) 文件。
 
 ## 相关项目
 

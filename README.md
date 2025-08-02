@@ -317,7 +317,7 @@ Contributions are welcome! Please feel free to:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 ## Related Projects
 

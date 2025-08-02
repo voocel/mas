@@ -1,4 +1,2 @@
-github.com/google/uuid v1.5.0 h1:1p67kYwdtXjb0gL0BPiP1Av9wiZPo5A8z2cWkTZ+eyU=
-github.com/google/uuid v1.5.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
-github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
+github.com/voocel/litellm v1.1.0 h1:HYvux/tWkOALV84C6zlUtEj6f5kcFoqzLp0IA37tFms=
+github.com/voocel/litellm v1.1.0/go.mod h1:oI5T7DdhCrxQBL5TO5tVmKr8MYX/7q/gI+kox450/e0=

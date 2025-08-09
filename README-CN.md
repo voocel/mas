@@ -81,6 +81,24 @@ func main() {
 }
 ```
 
+### 文件工具沙箱
+
+```go
+// 无限制访问
+tools.FileReader()
+
+// 仅当前目录
+sandbox := tools.DefaultSandbox()
+tools.FileReaderWithSandbox(sandbox)
+
+// 自定义允许路径
+sandbox := &tools.FileSandbox{
+    AllowedPaths: []string{"./data", "./uploads"},
+    AllowCurrentDir: false,
+}
+tools.FileWriterWithSandbox(sandbox)
+```
+
 ### 团队协作
 
 ```go
@@ -135,9 +153,9 @@ MAS 开箱即用地提供有用的工具：
 - **域名信息** - WHOIS、DNS、SSL信息
 
 ### 文件操作
-- **文件读写器** - 读写文件
-- **目录列表器** - 浏览文件系统
-- **文件信息** - 获取文件元数据
+- **文件读写器** - 读写文件，支持沙箱限制
+- **目录列表器** - 浏览文件系统，支持路径限制
+- **文件信息** - 获取文件元数据，支持访问控制
 
 ### 数据处理
 - **JSON解析器** - 解析和操作JSON

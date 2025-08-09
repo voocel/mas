@@ -34,16 +34,20 @@ func main() {
 	fmt.Println("\n3. File Operations Example:")
 	fileOperationsExample(apiKey)
 
-	// Example 4: Web search and scraping
-	fmt.Println("\n4. Web Tools Example:")
+	// Example 4: File sandbox
+	fmt.Println("\n4. File Sandbox Example:")
+	fileSandboxExample(apiKey)
+
+	// Example 5: Web search and scraping
+	fmt.Println("\n5. Web Tools Example:")
 	webToolsExample(apiKey)
 
-	// Example 5: Multiple tools
-	fmt.Println("\n5. Multiple Tools Example:")
+	// Example 6: Multiple tools
+	fmt.Println("\n6. Multiple Tools Example:")
 	multipleToolsExample(apiKey)
 
-	// Example 6: Custom tool
-	fmt.Println("\n6. Custom Tool Example:")
+	// Example 7: Custom tool
+	fmt.Println("\n7. Custom Tool Example:")
 	customToolExample(apiKey)
 }
 
@@ -68,7 +72,7 @@ func httpRequestExample(apiKey string) {
 		WithTools(tools.HTTPRequest(), tools.JSONParser()).
 		WithSystemPrompt("You are a web API assistant. Use HTTP tools to fetch and analyze data.")
 
-	response, err := agent.Chat(context.Background(), 
+	response, err := agent.Chat(context.Background(),
 		"Make a GET request to https://httpbin.org/json and tell me about the response")
 	if err != nil {
 		log.Printf("Error: %v", err)
@@ -92,7 +96,7 @@ func fileOperationsExample(apiKey string) {
 	ctx := context.Background()
 
 	// Create a test file
-	response1, err := agent.Chat(ctx, 
+	response1, err := agent.Chat(ctx,
 		"Create a file called 'test.txt' with the content 'Hello, MAS Framework!'")
 	if err != nil {
 		log.Printf("Error: %v", err)
@@ -117,6 +121,55 @@ func fileOperationsExample(apiKey string) {
 	fmt.Printf("Agent: %s\n", response3)
 }
 
+// fileSandboxExample demonstrates file tools with sandbox restrictions
+func fileSandboxExample(apiKey string) {
+	ctx := context.Background()
+
+	// Example 1: No sandbox (unrestricted)
+	fmt.Println("  Unrestricted access:")
+	agent1 := mas.NewAgent("gpt-4", apiKey).
+		WithTools(tools.FileReader()).
+		WithSystemPrompt("You are a file assistant.")
+
+	response1, err := agent1.Chat(ctx, "List current directory")
+	if err != nil {
+		log.Printf("Error: %v", err)
+	} else {
+		fmt.Printf("  Agent: %s\n", response1)
+	}
+
+	// Example 2: Current directory only
+	fmt.Println("  Current directory only:")
+	sandbox := tools.DefaultSandbox()
+	agent2 := mas.NewAgent("gpt-4", apiKey).
+		WithTools(tools.DirectoryListerWithSandbox(sandbox)).
+		WithSystemPrompt("You are restricted to current directory.")
+
+	response2, err := agent2.Chat(ctx, "Try to list parent directory '../'")
+	if err != nil {
+		fmt.Printf("  Expected restriction: %v\n", err)
+	} else {
+		fmt.Printf("  Agent: %s\n", response2)
+	}
+
+	// Example 3: Custom allowed paths
+	fmt.Println("  Custom allowed paths:")
+	customSandbox := &tools.FileSandbox{
+		AllowedPaths:    []string{"./examples"},
+		AllowCurrentDir: false,
+	}
+	agent3 := mas.NewAgent("gpt-4", apiKey).
+		WithTools(tools.DirectoryListerWithSandbox(customSandbox)).
+		WithSystemPrompt("You can only access ./examples directory.")
+
+	response3, err := agent3.Chat(ctx, "List ./examples directory")
+	if err != nil {
+		log.Printf("Error: %v", err)
+	} else {
+		fmt.Printf("  Agent: %s\n", response3)
+	}
+}
+
 // webToolsExample demonstrates web search and scraping tools
 func webToolsExample(apiKey string) {
 	agent := mas.NewAgent("gpt-4", apiKey).
@@ -127,7 +180,7 @@ func webToolsExample(apiKey string) {
 		).
 		WithSystemPrompt("You are a web research assistant. Help users find and analyze web information.")
 
-	response, err := agent.Chat(context.Background(), 
+	response, err := agent.Chat(context.Background(),
 		"Search for information about 'artificial intelligence' and tell me what you find")
 	if err != nil {
 		log.Printf("Error: %v", err)
@@ -152,7 +205,7 @@ func multipleToolsExample(apiKey string) {
 	ctx := context.Background()
 
 	// Complex task requiring multiple tools
-	response, err := agent.Chat(ctx, 
+	response, err := agent.Chat(ctx,
 		"Calculate 15% of 250, then search for information about percentage calculations, and save the result to a file called 'calculation_result.txt'")
 	if err != nil {
 		log.Printf("Error: %v", err)
@@ -171,7 +224,7 @@ func customToolExample(apiKey string) {
 		WithTools(randomTool).
 		WithSystemPrompt("You are an assistant with a random number generator tool.")
 
-	response, err := agent.Chat(context.Background(), 
+	response, err := agent.Chat(context.Background(),
 		"Generate a random number between 1 and 100")
 	if err != nil {
 		log.Printf("Error: %v", err)
@@ -211,11 +264,11 @@ func createRandomNumberTool() mas.Tool {
 			// Simple random number generation (not cryptographically secure)
 			range_ := max - min + 1
 			// Using a simple hash-based approach for demonstration
-			hash := int64(min*31 + max*17) % 1000
+			hash := int64(min*31+max*17) % 1000
 			if hash < 0 {
 				hash = -hash
 			}
-			
+
 			result := min + float64(hash%int64(range_))
 
 			return map[string]interface{}{
@@ -251,7 +304,7 @@ func toolRegistryExample(apiKey string) {
 		WithTools(registry.List()...).
 		WithSystemPrompt("You have access to multiple tools. Use them as needed.")
 
-	response, err := agent.Chat(context.Background(), 
+	response, err := agent.Chat(context.Background(),
 		"What tools do you have available?")
 	if err != nil {
 		log.Printf("Error: %v", err)

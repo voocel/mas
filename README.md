@@ -81,6 +81,24 @@ func main() {
 }
 ```
 
+### File Tools with Sandbox
+
+```go
+// Unrestricted access
+tools.FileReader()
+
+// Current directory only
+sandbox := tools.DefaultSandbox()
+tools.FileReaderWithSandbox(sandbox)
+
+// Custom allowed paths
+sandbox := &tools.FileSandbox{
+    AllowedPaths: []string{"./data", "./uploads"},
+    AllowCurrentDir: false,
+}
+tools.FileWriterWithSandbox(sandbox)
+```
+
 ### Team Collaboration
 
 ```go
@@ -135,9 +153,9 @@ MAS comes with useful tools out of the box:
 - **Domain Info** - WHOIS, DNS, SSL information
 
 ### File Operations
-- **File Reader/Writer** - Read and write files
-- **Directory Lister** - Browse filesystem
-- **File Info** - Get file metadata
+- **File Reader/Writer** - Read and write files with sandbox support
+- **Directory Lister** - Browse filesystem with path restrictions
+- **File Info** - Get file metadata with access control
 
 ### Data Processing
 - **JSON Parser** - Parse and manipulate JSON

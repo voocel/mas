@@ -13,8 +13,69 @@ import (
 	"github.com/voocel/mas"
 )
 
+// FileSandbox defines allowed paths for file operations
+type FileSandbox struct {
+	// AllowedPaths is a list of allowed directory paths
+	AllowedPaths []string
+	// AllowCurrentDir allows operations in current working directory
+	AllowCurrentDir bool
+}
+
+// DefaultSandbox returns a sandbox that only allows current directory
+func DefaultSandbox() *FileSandbox {
+	return &FileSandbox{
+		AllowCurrentDir: true,
+	}
+}
+
+// NoSandbox returns nil (no restrictions)
+func NoSandbox() *FileSandbox {
+	return nil
+}
+
+// validatePath checks if a path is allowed by the sandbox
+func validatePath(path string, sandbox *FileSandbox) error {
+	if sandbox == nil {
+		return nil // No restrictions
+	}
+
+	// Get absolute path for comparison
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("failed to resolve absolute path: %v", err)
+	}
+
+	// Check if current directory is allowed
+	if sandbox.AllowCurrentDir {
+		cwd, err := os.Getwd()
+		if err == nil {
+			if strings.HasPrefix(absPath, cwd) {
+				return nil
+			}
+		}
+	}
+
+	// Check allowed paths
+	for _, allowedPath := range sandbox.AllowedPaths {
+		allowedAbs, err := filepath.Abs(allowedPath)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(absPath, allowedAbs) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("path '%s' is not allowed by sandbox", path)
+}
+
 // FileReader creates a file reading tool
 func FileReader() mas.Tool {
+	return FileReaderWithSandbox(nil)
+}
+
+// FileReaderWithSandbox creates a file reading tool with sandbox restrictions
+func FileReaderWithSandbox(sandbox *FileSandbox) mas.Tool {
 	schema := &mas.ToolSchema{
 		Type: "object",
 		Properties: map[string]*mas.PropertySchema{
@@ -33,6 +94,11 @@ func FileReader() mas.Tool {
 			path, ok := params["path"].(string)
 			if !ok {
 				return nil, fmt.Errorf("path parameter is required")
+			}
+
+			// Validate path against sandbox
+			if err := validatePath(path, sandbox); err != nil {
+				return nil, err
 			}
 
 			format := "text"
@@ -99,6 +165,11 @@ func FileReader() mas.Tool {
 
 // FileWriter creates a file writing tool
 func FileWriter() mas.Tool {
+	return FileWriterWithSandbox(nil)
+}
+
+// FileWriterWithSandbox creates a file writing tool with sandbox restrictions
+func FileWriterWithSandbox(sandbox *FileSandbox) mas.Tool {
 	schema := &mas.ToolSchema{
 		Type: "object",
 		Properties: map[string]*mas.PropertySchema{
@@ -118,6 +189,11 @@ func FileWriter() mas.Tool {
 			path, ok := params["path"].(string)
 			if !ok {
 				return nil, fmt.Errorf("path parameter is required")
+			}
+
+			// Validate path against sandbox
+			if err := validatePath(path, sandbox); err != nil {
+				return nil, err
 			}
 
 			content, ok := params["content"].(string)
@@ -198,13 +274,18 @@ func FileWriter() mas.Tool {
 
 // DirectoryLister creates a directory listing tool
 func DirectoryLister() mas.Tool {
+	return DirectoryListerWithSandbox(nil)
+}
+
+// DirectoryListerWithSandbox creates a directory listing tool with sandbox restrictions
+func DirectoryListerWithSandbox(sandbox *FileSandbox) mas.Tool {
 	schema := &mas.ToolSchema{
 		Type: "object",
 		Properties: map[string]*mas.PropertySchema{
-			"path":      mas.StringProperty("Directory path to list"),
-			"recursive": mas.BooleanProperty("List directories recursively"),
+			"path":        mas.StringProperty("Directory path to list"),
+			"recursive":   mas.BooleanProperty("List directories recursively"),
 			"show_hidden": mas.BooleanProperty("Include hidden files and directories"),
-			"pattern":   mas.StringProperty("Filename pattern to match (e.g., '*.txt')"),
+			"pattern":     mas.StringProperty("Filename pattern to match (e.g., '*.txt')"),
 		},
 		Required: []string{"path"},
 	}
@@ -217,6 +298,11 @@ func DirectoryLister() mas.Tool {
 			path, ok := params["path"].(string)
 			if !ok {
 				return nil, fmt.Errorf("path parameter is required")
+			}
+
+			// Validate path against sandbox
+			if err := validatePath(path, sandbox); err != nil {
+				return nil, err
 			}
 
 			recursive := false
@@ -299,6 +385,11 @@ func DirectoryLister() mas.Tool {
 
 // FileInfo creates a file information tool
 func FileInfo() mas.Tool {
+	return FileInfoWithSandbox(nil)
+}
+
+// FileInfoWithSandbox creates a file information tool with sandbox restrictions
+func FileInfoWithSandbox(sandbox *FileSandbox) mas.Tool {
 	schema := &mas.ToolSchema{
 		Type: "object",
 		Properties: map[string]*mas.PropertySchema{
@@ -315,6 +406,11 @@ func FileInfo() mas.Tool {
 			path, ok := params["path"].(string)
 			if !ok {
 				return nil, fmt.Errorf("path parameter is required")
+			}
+
+			// Validate path against sandbox
+			if err := validatePath(path, sandbox); err != nil {
+				return nil, err
 			}
 
 			info, err := os.Stat(path)

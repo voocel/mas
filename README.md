@@ -18,9 +18,11 @@ MAS (Multi-Agent System) is a lightweight, elegant multi-agent framework for Go,
 ## Features
 
 - **Intelligent Agents**: LLM-powered agents with memory and tools
-- **Tool System**: Extensible tool framework for external capabilities
+- **Workflow Orchestration**: State graph-based multi-agent coordination
+- **Message Bus**: Asynchronous communication between agents
+- **Tool System**: Extensible tool framework with sandbox security
 - **Memory Management**: Conversation and summary memory implementations
-- **Team Collaboration**: Multi-agent workflows and coordination
+- **Checkpoint & Recovery**: Workflow state persistence and replay
 - **LLM Integration**: Built on [litellm](https://github.com/voocel/litellm) for multiple providers
 - **Lightweight**: Minimal dependencies, easy to embed
 - **Fluent API**: Chain-able configuration methods
@@ -99,26 +101,25 @@ sandbox := &tools.FileSandbox{
 tools.FileWriterWithSandbox(sandbox)
 ```
 
-### Team Collaboration
+### Multi-Agent Workflows
 
 ```go
 func main() {
     // Create specialized agents
     researcher := mas.NewAgent("gemini-2.5-pro", apiKey).
-        WithSystemPrompt("You are a researcher. Gather key information.").
-        WithTools(tools.WebSearch())
-    
+        WithSystemPrompt("You are a researcher.")
+
     writer := mas.NewAgent("claude-4-sonnet", apiKey).
-        WithSystemPrompt("You are a writer. Create engaging content.")
-    
-    // Create a team workflow
-    team := mas.NewTeam().
-        Add("researcher", researcher).
-        Add("writer", writer).
-        WithFlow("researcher", "writer")
-    
-    result, err := team.Execute(context.Background(), 
-        "Research and write about renewable energy benefits")
+        WithSystemPrompt("You are a writer.")
+
+    // Create workflow with state graph
+    workflow := mas.NewWorkflow().
+        AddNode(mas.NewAgentNode("researcher", researcher)).
+        AddNode(mas.NewAgentNode("writer", writer)).
+        AddEdge("researcher", "writer").
+        SetStart("researcher")
+
+    state, err := workflow.Execute(context.Background(), initialState)
 }
 ```
 
@@ -127,8 +128,8 @@ func main() {
 The [`examples/`](examples/) directory contains comprehensive examples:
 
 - **[Basic Usage](examples/basic/)** - Simple agent interactions and configuration
-- **[Tools Usage](examples/tools/)** - Built-in and custom tools
-- **[Team Collaboration](examples/team/)** - Multi-agent workflows
+- **[Tools Usage](examples/tools/)** - Built-in and custom tools with sandbox
+- **[Workflow Orchestration](examples/workflow/)** - Multi-agent workflows and coordination
 
 Run examples:
 
@@ -194,36 +195,7 @@ multiTier := memory.MultiTier(
 )
 ```
 
-## Team Patterns
 
-### Sequential Processing
-```go
-team := mas.NewTeam().
-    Add("analyzer", analyzerAgent).
-    Add("writer", writerAgent).
-    Add("editor", editorAgent).
-    WithFlow("analyzer", "writer", "editor")
-```
-
-### Parallel Processing
-```go
-team := mas.NewTeam().
-    Add("tech", techAgent).
-    Add("business", businessAgent).
-    Add("risk", riskAgent).
-    WithFlow("tech", "business", "risk").
-    WithParallel(true)
-```
-
-### Shared Memory
-```go
-sharedMemory := memory.ThreadSafe(memory.Conversation(30))
-
-team := mas.NewTeam().
-    Add("agent1", agent1).
-    Add("agent2", agent2).
-    SetSharedMemory(sharedMemory)
-```
 
 ## Custom Tools
 
@@ -261,7 +233,7 @@ mas/
 ├── agent.go           # Core agent implementation
 ├── tool.go            # Tool interface and registry
 ├── memory.go          # Memory interfaces
-├── team.go            # Multi-agent collaboration
+├── workflow.go        # Multi-agent workflow orchestration
 ├── llm/               # LLM provider integration
 ├── tools/             # Built-in tools
 ├── memory/            # Memory implementations

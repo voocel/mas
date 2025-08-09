@@ -15,13 +15,13 @@ func main() {
 
 	// Test 1: Basic Agent Creation
 	fmt.Println("\nTest 1: Basic Agent Creation")
-	agent := mas.NewAgent("gpt-4", "test-key")
+	agent := mas.NewAgent("gpt-4o", "test-key")
 	fmt.Printf("Agent Name: %s\n", agent.Name())
 	fmt.Printf("Agent Model: %s\n", agent.Model())
 
 	// Test 2: Agent with Configuration
 	fmt.Println("\nTest 2: Agent with Fluent Configuration")
-	configuredAgent := mas.NewAgent("gpt-3.5-turbo", "test-key").
+	configuredAgent := mas.NewAgent("gpt-4.1", "test-key").
 		WithSystemPrompt("You are a helpful assistant.").
 		WithTemperature(0.7).
 		WithMaxTokens(1000).
@@ -41,7 +41,7 @@ func main() {
 
 	// Test 4: Agent with Tools
 	fmt.Println("\nTest 4: Agent with Tools")
-	toolAgent := mas.NewAgent("gpt-4", "test-key").
+	toolAgent := mas.NewAgent("gpt-4.1", "test-key").
 		WithTools(calc, httpTool, webSearch).
 		WithMemory(memory.Conversation(5))
 
@@ -57,19 +57,20 @@ func main() {
 	fmt.Printf("Persistent Memory: %T\n", persistentMemory)
 	fmt.Printf("Shared Memory: %T\n", sharedMemory)
 
-	// Test 6: Team Creation
-	fmt.Println("\nTest 6: Team Creation")
-	researcher := mas.NewAgent("gpt-4", "test-key").
+	// Test 6: Workflow
+	fmt.Println("\nTest 6: Workflow")
+	researcher := mas.NewAgent("gpt-4.1", "test-key").
 		WithSystemPrompt("You are a researcher.")
-	writer := mas.NewAgent("gpt-4", "test-key").
+	writer := mas.NewAgent("gpt-4.1", "test-key").
 		WithSystemPrompt("You are a writer.")
 
-	team := mas.NewTeam().
-		Add("researcher", researcher).
-		Add("writer", writer).
-		WithFlow("researcher", "writer")
+	_ = mas.NewWorkflow().
+		AddNode(mas.NewAgentNode("researcher", researcher)).
+		AddNode(mas.NewAgentNode("writer", writer)).
+		AddEdge("researcher", "writer").
+		SetStart("researcher")
 
-	fmt.Printf("Team created with agents: %v\n", team.ListAgents())
+	fmt.Printf("Workflow created with nodes\n")
 
 	// Test 7: Tool Registry
 	fmt.Println("\nTest 7: Tool Registry")

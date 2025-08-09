@@ -18,9 +18,11 @@ MAS (Multi-Agent System) 是一个轻量级、优雅的Go多智能体框架，�
 ## 特性
 
 - **智能代理**: 由LLM驱动的具有记忆和工具的智能体
-- **工具系统**: 可扩展的工具框架，提供外部能力
+- **工作流编排**: 基于状态图的多智能体协调
+- **消息总线**: 智能体间异步通信
+- **工具系统**: 可扩展的工具框架，支持沙箱安全
 - **内存管理**: 对话和摘要内存实现
-- **团队协作**: 多智能体工作流和协调
+- **检查点恢复**: 工作流状态持久化和重放
 - **LLM集成**: 基于 [litellm](https://github.com/voocel/litellm) 支持多个提供商
 - **轻量级**: 最少依赖，易于嵌入
 - **流式API**: 可链式调用的配置方法
@@ -99,26 +101,25 @@ sandbox := &tools.FileSandbox{
 tools.FileWriterWithSandbox(sandbox)
 ```
 
-### 团队协作
+### 多智能体工作流
 
 ```go
 func main() {
     // 创建专业化智能体
     researcher := mas.NewAgent("gemini-2.5-pro", apiKey).
-        WithSystemPrompt("你是一个研究员。收集关键信息。").
-        WithTools(tools.WebSearch())
-    
+        WithSystemPrompt("你是一个研究员。")
+
     writer := mas.NewAgent("claude-4-sonnet", apiKey).
-        WithSystemPrompt("你是一个作家。创建引人入胜的内容。")
-    
-    // 创建团队工作流
-    team := mas.NewTeam().
-        Add("researcher", researcher).
-        Add("writer", writer).
-        WithFlow("researcher", "writer")
-    
-    result, err := team.Execute(context.Background(), 
-        "研究并撰写关于可再生能源好处的文章")
+        WithSystemPrompt("你是一个作家。")
+
+    // 创建状态图工作流
+    workflow := mas.NewWorkflow().
+        AddNode(mas.NewAgentNode("researcher", researcher)).
+        AddNode(mas.NewAgentNode("writer", writer)).
+        AddEdge("researcher", "writer").
+        SetStart("researcher")
+
+    state, err := workflow.Execute(context.Background(), initialState)
 }
 ```
 
@@ -127,8 +128,8 @@ func main() {
 [`examples/`](examples/) 目录包含全面的示例：
 
 - **[基本用法](examples/basic/)** - 简单的智能体交互和配置
-- **[工具用法](examples/tools/)** - 内置和自定义工具
-- **[团队协作](examples/team/)** - 多智能体工作流
+- **[工具用法](examples/tools/)** - 内置和自定义工具，支持沙箱
+- **[工作流编排](examples/workflow/)** - 多智能体工作流和协调
 
 运行示例：
 
@@ -194,36 +195,7 @@ multiTier := memory.MultiTier(
 )
 ```
 
-## 团队模式
 
-### 顺序处理
-```go
-team := mas.NewTeam().
-    Add("analyzer", analyzerAgent).
-    Add("writer", writerAgent).
-    Add("editor", editorAgent).
-    WithFlow("analyzer", "writer", "editor")
-```
-
-### 并行处理
-```go
-team := mas.NewTeam().
-    Add("tech", techAgent).
-    Add("business", businessAgent).
-    Add("risk", riskAgent).
-    WithFlow("tech", "business", "risk").
-    WithParallel(true)
-```
-
-### 共享内存
-```go
-sharedMemory := memory.ThreadSafe(memory.Conversation(30))
-
-team := mas.NewTeam().
-    Add("agent1", agent1).
-    Add("agent2", agent2).
-    SetSharedMemory(sharedMemory)
-```
 
 ## 自定义工具
 
@@ -261,7 +233,7 @@ mas/
 ├── agent.go           # 核心智能体实现
 ├── tool.go            # 工具接口和注册表
 ├── memory.go          # 内存接口
-├── team.go            # 多智能体协作
+├── workflow.go        # 多智能体工作流编排
 ├── llm/               # LLM提供商集成
 ├── tools/             # 内置工具
 ├── memory/            # 内存实现

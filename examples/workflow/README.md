@@ -7,6 +7,8 @@ This example demonstrates the simple and elegant workflow orchestration system i
 - **Sequential Workflows**: Chain agents together in a pipeline
 - **Parallel Execution**: Run multiple agents concurrently
 - **Tool Integration**: Seamlessly integrate tools into workflows
+- **Conditional Routing**: Dynamic workflow paths based on context state
+- **Human-in-the-Loop**: Interactive approval and input mechanisms
 - **Context Sharing**: Agents share data through WorkflowContext
 
 ## Usage
@@ -56,6 +58,37 @@ calculator := mas.NewToolNode("calc", tools.Calculator()).
 workflow := mas.NewWorkflow().
     AddNode(calculator).
     SetStart("calc")
+```
+
+### Conditional Routing
+
+```go
+workflow := mas.NewWorkflow().
+    AddNode(mas.NewAgentNode("classifier", classifier)).
+    AddNode(mas.NewAgentNode("tech_expert", techExpert)).
+    AddNode(mas.NewAgentNode("biz_expert", bizExpert)).
+    AddConditionalRoute("classifier",
+        func(ctx *mas.WorkflowContext) bool {
+            output := ctx.Get("output")
+            return strings.Contains(fmt.Sprintf("%v", output), "technical")
+        },
+        "tech_expert", "biz_expert").
+    SetStart("classifier")
+```
+
+### Human-in-the-Loop
+
+```go
+humanProvider := mas.NewConsoleInputProvider()
+
+workflow := mas.NewWorkflow().
+    AddNode(mas.NewAgentNode("drafter", drafter)).
+    AddNode(mas.NewHumanNode("reviewer", "Please review:", humanProvider).
+        WithOptions(mas.WithTimeout(2*time.Minute))).
+    AddNode(mas.NewAgentNode("finalizer", finalizer)).
+    AddEdge("drafter", "reviewer").
+    AddEdge("reviewer", "finalizer").
+    SetStart("drafter")
 ```
 
 ## Design Principles

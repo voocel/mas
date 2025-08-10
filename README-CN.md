@@ -19,10 +19,10 @@ MAS (Multi-Agent System) 是一个轻量级、优雅的Go多智能体框架，�
 
 - **智能代理**: 由LLM驱动的具有记忆和工具的智能体
 - **工作流编排**: 基于状态图的多智能体协调
-- **消息总线**: 智能体间异步通信
+- **条件路由**: 基于上下文状态的动态工作流路径
+- **人工干预**: 交互式审批和输入机制
 - **工具系统**: 可扩展的工具框架，支持沙箱安全
 - **内存管理**: 对话和摘要内存实现
-- **检查点恢复**: 工作流状态持久化和重放
 - **LLM集成**: 基于 [litellm](https://github.com/voocel/litellm) 支持多个提供商
 - **轻量级**: 最少依赖，易于嵌入
 - **流式API**: 可链式调用的配置方法
@@ -120,6 +120,52 @@ func main() {
         SetStart("researcher")
 
     state, err := workflow.Execute(context.Background(), initialState)
+}
+```
+
+### 条件路由
+
+```go
+// 简单条件路由
+workflow.AddConditionalRoute("classifier",
+    func(ctx *mas.WorkflowContext) bool {
+        output := ctx.Get("output")
+        return strings.Contains(fmt.Sprintf("%v", output), "技术")
+    },
+    "tech_expert", "biz_expert")
+
+// 多分支条件
+workflow.AddConditionalEdge("router",
+    mas.When(func(ctx *mas.WorkflowContext) bool {
+        return ctx.Get("score").(int) > 8
+    }, "approve"),
+    mas.When(func(ctx *mas.WorkflowContext) bool {
+        return ctx.Get("score").(int) > 5
+    }, "review"),
+    mas.When(func(ctx *mas.WorkflowContext) bool { return true }, "reject"),
+)
+```
+
+### 人工干预
+
+```go
+// 控制台输入，支持超时和验证
+humanProvider := mas.NewConsoleInputProvider()
+humanNode := mas.NewHumanNode("reviewer", "请审核内容：", humanProvider).
+    WithOptions(
+        mas.WithTimeout(5*time.Minute),
+        mas.WithValidator(func(input string) error {
+            if len(input) < 10 {
+                return errors.New("反馈太短")
+            }
+            return nil
+        }),
+    )
+
+// 自定义输入提供者（Web、API等）
+type WebInputProvider struct{}
+func (p *WebInputProvider) RequestInput(ctx context.Context, prompt string, options ...mas.HumanInputOption) (*mas.HumanInput, error) {
+    // 实现基于Web的输入收集
 }
 ```
 
@@ -295,6 +341,23 @@ go test ./...
 - [设计文档](CLAUDE.md) - 架构和设计决策
 - [API参考](https://pkg.go.dev/github.com/voocel/mas) - 完整API文档
 - [示例](examples/) - 实际使用示例
+
+## 路线图
+
+### 高优先级
+- [x] **条件路由** - 基于上下文状态的动态工作流路径
+- [x] **人工干预** - 交互式审批和输入机制
+- [ ] **循环检测控制** - 智能循环处理和循环预防
+
+### 中优先级
+- [ ] **检查点恢复** - 工作流状态持久化和恢复
+- [ ] **基于角色的智能体** - 内置角色系统和预定义行为
+- [ ] **高级工具集成** - 工具链和条件工具使用
+
+### 低优先级
+- [ ] **监控与可观测性** - 内置追踪和指标
+- [ ] **可视化工作流设计器** - 基于Web的工作流构建器
+- [ ] **云集成** - 主流云平台的原生支持
 
 ## 贡献
 

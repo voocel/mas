@@ -82,6 +82,39 @@ func (b *WorkflowBuilder) SetStart(nodeID string) *WorkflowBuilder {
 	return b
 }
 
+// AddConditionalEdge adds a conditional edge with multiple conditions
+func (b *WorkflowBuilder) AddConditionalEdge(fromNodeID string, conditions ...Condition) *WorkflowBuilder {
+	// Create a conditional node
+	conditionalNodeID := fromNodeID + "_conditional"
+	conditionalNode := NewConditionalNode(conditionalNodeID)
+
+	for _, condition := range conditions {
+		conditionalNode.When(condition.Check, condition.Target)
+	}
+
+	// Add the conditional node and connect it
+	b.nodes[conditionalNodeID] = conditionalNode
+	b.edges[fromNodeID] = []string{conditionalNodeID}
+
+	return b
+}
+
+// When creates a condition for use with AddConditionalEdge
+func When(check func(*WorkflowContext) bool, target string) Condition {
+	return Condition{
+		Check:  check,
+		Target: target,
+	}
+}
+
+// AddConditionalRoute adds a simple conditional route (convenience method)
+func (b *WorkflowBuilder) AddConditionalRoute(fromNodeID string, condition func(*WorkflowContext) bool, trueTarget, falseTarget string) *WorkflowBuilder {
+	return b.AddConditionalEdge(fromNodeID,
+		When(condition, trueTarget),
+		When(func(*WorkflowContext) bool { return true }, falseTarget), // Default case
+	)
+}
+
 // Execute runs the workflow
 func (b *WorkflowBuilder) Execute(ctx context.Context, initialData map[string]any) (*WorkflowContext, error) {
 	wfCtx := &WorkflowContext{
@@ -109,7 +142,6 @@ func (b *WorkflowBuilder) executeFrom(ctx context.Context, nodeID string, wfCtx 
 		}
 		visited[currentNodeID] = true
 
-		// Check context cancellation
 		select {
 		case <-ctx.Done():
 			return wfCtx, ctx.Err()
@@ -126,7 +158,16 @@ func (b *WorkflowBuilder) executeFrom(ctx context.Context, nodeID string, wfCtx 
 			return wfCtx, fmt.Errorf("node %s execution failed: %w", currentNodeID, err)
 		}
 
-		// Add next nodes to queue
+		// Check if node specified next node (for conditional routing)
+		if nextNode := wfCtx.Get("next_node"); nextNode != nil {
+			if nextNodeStr, ok := nextNode.(string); ok && nextNodeStr != "" {
+				wfCtx.Set("next_node", nil) // Clear for next iteration
+				queue = append(queue, nextNodeStr)
+				continue
+			}
+		}
+
+		// Add next nodes to queue based on edges
 		if nextNodes, exists := b.edges[currentNodeID]; exists {
 			queue = append(queue, nextNodes...)
 		}
@@ -163,13 +204,11 @@ func (n *AgentNode) ID() string {
 
 // Execute runs the agent
 func (n *AgentNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
-	// Get input from context
 	input := wfCtx.Get("input")
 	if input == nil {
 		input = "Continue with the workflow"
 	}
 
-	// Use custom prompt if provided
 	prompt := fmt.Sprintf("%v", input)
 	if n.prompt != "" {
 		prompt = fmt.Sprintf(n.prompt, input)
@@ -271,7 +310,6 @@ func (n *ParallelNode) Execute(ctx context.Context, wfCtx *WorkflowContext) erro
 		return nil
 	}
 
-	// Create error channel
 	errChan := make(chan error, len(n.nodes))
 
 	// Execute all nodes concurrently
@@ -289,6 +327,231 @@ func (n *ParallelNode) Execute(ctx context.Context, wfCtx *WorkflowContext) erro
 	}
 
 	return nil
+}
+
+// ConditionFunc represents a condition function for routing
+type ConditionFunc func(*WorkflowContext) string
+
+// ConditionalNode makes routing decisions based on context state
+type ConditionalNode struct {
+	id         string
+	conditions []Condition
+	defaultTo  string
+}
+
+// Condition represents a single condition with its target
+type Condition struct {
+	Check  func(*WorkflowContext) bool
+	Target string
+}
+
+// NewConditionalNode creates a new conditional routing node
+func NewConditionalNode(id string) *ConditionalNode {
+	return &ConditionalNode{
+		id:         id,
+		conditions: make([]Condition, 0),
+	}
+}
+
+// When adds a condition with its target node
+func (n *ConditionalNode) When(check func(*WorkflowContext) bool, target string) *ConditionalNode {
+	n.conditions = append(n.conditions, Condition{
+		Check:  check,
+		Target: target,
+	})
+	return n
+}
+
+// Otherwise sets the default target when no conditions match
+func (n *ConditionalNode) Otherwise(target string) *ConditionalNode {
+	n.defaultTo = target
+	return n
+}
+
+// ID returns the node ID
+func (n *ConditionalNode) ID() string {
+	return n.id
+}
+
+// Execute evaluates conditions and returns the target node
+func (n *ConditionalNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
+	// Find the first matching condition
+	for _, condition := range n.conditions {
+		if condition.Check(wfCtx) {
+			wfCtx.Set("next_node", condition.Target)
+			return nil
+		}
+	}
+
+	// Use default if no conditions match
+	if n.defaultTo != "" {
+		wfCtx.Set("next_node", n.defaultTo)
+		return nil
+	}
+
+	return fmt.Errorf("no matching condition and no default route in conditional node %s", n.id)
+}
+
+// HumanInput represents input from a human user
+type HumanInput struct {
+	Value string
+	Data  map[string]any
+}
+
+// HumanInputProvider handles human input collection
+type HumanInputProvider interface {
+	// RequestInput requests input from a human with a prompt
+	RequestInput(ctx context.Context, prompt string, options ...HumanInputOption) (*HumanInput, error)
+}
+
+// HumanInputOption configures human input behavior
+type HumanInputOption func(*HumanInputConfig)
+
+// HumanInputConfig contains configuration for human input
+type HumanInputConfig struct {
+	Timeout   time.Duration
+	Validator func(string) error
+	Required  bool
+}
+
+// WithTimeout sets the timeout for human input
+func WithTimeout(timeout time.Duration) HumanInputOption {
+	return func(config *HumanInputConfig) {
+		config.Timeout = timeout
+	}
+}
+
+// WithValidator sets a validation function for human input
+func WithValidator(validator func(string) error) HumanInputOption {
+	return func(config *HumanInputConfig) {
+		config.Validator = validator
+	}
+}
+
+// WithRequired sets whether input is required
+func WithRequired(required bool) HumanInputOption {
+	return func(config *HumanInputConfig) {
+		config.Required = required
+	}
+}
+
+// DefaultHumanInputConfig returns default configuration
+func DefaultHumanInputConfig() HumanInputConfig {
+	return HumanInputConfig{
+		Timeout:  5 * time.Minute,
+		Required: true,
+	}
+}
+
+// HumanNode represents a node that requires human input
+type HumanNode struct {
+	id       string
+	prompt   string
+	provider HumanInputProvider
+	options  []HumanInputOption
+}
+
+// NewHumanNode creates a new human input node
+func NewHumanNode(id, prompt string, provider HumanInputProvider) *HumanNode {
+	return &HumanNode{
+		id:       id,
+		prompt:   prompt,
+		provider: provider,
+		options:  make([]HumanInputOption, 0),
+	}
+}
+
+// WithOptions adds configuration options
+func (n *HumanNode) WithOptions(options ...HumanInputOption) *HumanNode {
+	n.options = append(n.options, options...)
+	return n
+}
+
+// ID returns the node ID
+func (n *HumanNode) ID() string {
+	return n.id
+}
+
+// Execute requests human input and stores the result
+func (n *HumanNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
+	// Build prompt with context data
+	prompt := n.prompt
+	if contextData := wfCtx.Get("output"); contextData != nil {
+		prompt = fmt.Sprintf("%s\n\nContext: %v", prompt, contextData)
+	}
+
+	// Request human input
+	input, err := n.provider.RequestInput(ctx, prompt, n.options...)
+	if err != nil {
+		return fmt.Errorf("human input failed: %w", err)
+	}
+
+	// Store input in context
+	wfCtx.Set("human_input", input.Value)
+	wfCtx.Set("human_data", input.Data)
+	wfCtx.AddMessage("human", input.Value)
+
+	return nil
+}
+
+// ConsoleInputProvider provides human input via console
+type ConsoleInputProvider struct{}
+
+// NewConsoleInputProvider creates a new console input provider
+func NewConsoleInputProvider() *ConsoleInputProvider {
+	return &ConsoleInputProvider{}
+}
+
+// RequestInput requests input from console with timeout
+func (p *ConsoleInputProvider) RequestInput(ctx context.Context, prompt string, options ...HumanInputOption) (*HumanInput, error) {
+	config := DefaultHumanInputConfig()
+	for _, option := range options {
+		option(&config)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, config.Timeout)
+	defer cancel()
+
+	inputChan := make(chan *HumanInput, 1)
+	errChan := make(chan error, 1)
+
+	// Start input goroutine
+	go func() {
+		fmt.Printf("\nHuman Input Required:\n%s\n> ", prompt)
+
+		var input string
+		_, err := fmt.Scanln(&input)
+		if err != nil {
+			errChan <- fmt.Errorf("failed to read input: %w", err)
+			return
+		}
+
+		if config.Validator != nil {
+			if err := config.Validator(input); err != nil {
+				errChan <- fmt.Errorf("validation failed: %w", err)
+				return
+			}
+		}
+
+		if config.Required && input == "" {
+			errChan <- fmt.Errorf("input is required")
+			return
+		}
+
+		inputChan <- &HumanInput{
+			Value: input,
+			Data:  make(map[string]any),
+		}
+	}()
+
+	select {
+	case input := <-inputChan:
+		return input, nil
+	case err := <-errChan:
+		return nil, err
+	case <-timeoutCtx.Done():
+		return nil, fmt.Errorf("human input timeout after %v", config.Timeout)
+	}
 }
 
 // generateWorkflowID generates a unique workflow ID

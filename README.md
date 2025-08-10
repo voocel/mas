@@ -19,10 +19,10 @@ MAS (Multi-Agent System) is a lightweight, elegant multi-agent framework for Go,
 
 - **Intelligent Agents**: LLM-powered agents with memory and tools
 - **Workflow Orchestration**: State graph-based multi-agent coordination
-- **Message Bus**: Asynchronous communication between agents
+- **Conditional Routing**: Dynamic workflow paths based on context state
+- **Human-in-the-Loop**: Interactive approval and input mechanisms
 - **Tool System**: Extensible tool framework with sandbox security
 - **Memory Management**: Conversation and summary memory implementations
-- **Checkpoint & Recovery**: Workflow state persistence and replay
 - **LLM Integration**: Built on [litellm](https://github.com/voocel/litellm) for multiple providers
 - **Lightweight**: Minimal dependencies, easy to embed
 - **Fluent API**: Chain-able configuration methods
@@ -120,6 +120,52 @@ func main() {
         SetStart("researcher")
 
     state, err := workflow.Execute(context.Background(), initialState)
+}
+```
+
+### Conditional Routing
+
+```go
+// Simple conditional routing
+workflow.AddConditionalRoute("classifier",
+    func(ctx *mas.WorkflowContext) bool {
+        output := ctx.Get("output")
+        return strings.Contains(fmt.Sprintf("%v", output), "technical")
+    },
+    "tech_expert", "biz_expert")
+
+// Multi-branch conditions
+workflow.AddConditionalEdge("router",
+    mas.When(func(ctx *mas.WorkflowContext) bool {
+        return ctx.Get("score").(int) > 8
+    }, "approve"),
+    mas.When(func(ctx *mas.WorkflowContext) bool {
+        return ctx.Get("score").(int) > 5
+    }, "review"),
+    mas.When(func(ctx *mas.WorkflowContext) bool { return true }, "reject"),
+)
+```
+
+### Human-in-the-Loop
+
+```go
+// Console input with timeout and validation
+humanProvider := mas.NewConsoleInputProvider()
+humanNode := mas.NewHumanNode("reviewer", "Please review the content:", humanProvider).
+    WithOptions(
+        mas.WithTimeout(5*time.Minute),
+        mas.WithValidator(func(input string) error {
+            if len(input) < 10 {
+                return errors.New("feedback too short")
+            }
+            return nil
+        }),
+    )
+
+// Custom input provider (Web, API, etc.)
+type WebInputProvider struct{}
+func (p *WebInputProvider) RequestInput(ctx context.Context, prompt string, options ...mas.HumanInputOption) (*mas.HumanInput, error) {
+    // Implement web-based input collection
 }
 ```
 
@@ -295,6 +341,23 @@ go test ./...
 - [Design Document](CLAUDE.md) - Architecture and design decisions
 - [API Reference](https://pkg.go.dev/github.com/voocel/mas) - Complete API documentation
 - [Examples](examples/) - Practical usage examples
+
+## Roadmap
+
+### High Priority
+- [x] **Conditional Routing** - Dynamic workflow paths based on context state
+- [x] **Human-in-the-Loop** - Interactive approval and input mechanisms
+- [ ] **Loop Detection & Control** - Smart loop handling and cycle prevention
+
+### Medium Priority
+- [ ] **Checkpoint & Recovery** - Workflow state persistence and resumption
+- [ ] **Role-based Agents** - Built-in role system with predefined behaviors
+- [ ] **Advanced Tool Integration** - Tool chaining and conditional tool usage
+
+### Low Priority
+- [ ] **Monitoring & Observability** - Built-in tracing and metrics
+- [ ] **Visual Workflow Designer** - Web-based workflow builder
+- [ ] **Cloud Integration** - Native support for major cloud platforms
 
 ## Contributing
 

@@ -19,6 +19,7 @@ type agent struct {
 	memory       Memory
 	state        map[string]interface{}
 	provider     llm.Provider
+	eventBus     EventBus
 	mu           sync.RWMutex
 }
 
@@ -83,6 +84,15 @@ func DefaultAgentConfig() AgentConfig {
 }
 
 func (a *agent) Chat(ctx context.Context, message string) (string, error) {
+	// Emit chat start event
+	if err := a.PublishEvent(ctx, EventAgentChatStart, EventData(
+		"message", message,
+		"agent_name", a.Name(),
+	)); err != nil {
+		// Log but don't fail
+		fmt.Printf("Failed to publish chat start event: %v\n", err)
+	}
+
 	if a.provider == nil {
 		return "", fmt.Errorf("no LLM provider configured")
 	}
@@ -132,37 +142,107 @@ func (a *agent) Chat(ctx context.Context, message string) (string, error) {
 		}
 	}
 
+	// Emit chat end event
+	if err := a.PublishEvent(ctx, EventAgentChatEnd, EventData(
+		"message", message,
+		"response", choice.Message.Content,
+		"agent_name", a.Name(),
+		"success", true,
+	)); err != nil {
+		fmt.Printf("Failed to publish chat end event: %v\n", err)
+	}
+
 	return choice.Message.Content, nil
 }
 
 func (a *agent) WithTools(tools ...Tool) Agent {
-	newAgent := *a
-	newAgent.tools = append(newAgent.tools, tools...)
-	return &newAgent
+	return &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: a.systemPrompt,
+		temperature:  a.temperature,
+		maxTokens:    a.maxTokens,
+		tools:        append(a.tools, tools...),
+		memory:       a.memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     a.eventBus,
+	}
 }
 
 func (a *agent) WithMemory(memory Memory) Agent {
-	newAgent := *a
-	newAgent.memory = memory
-	return &newAgent
+	return &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: a.systemPrompt,
+		temperature:  a.temperature,
+		maxTokens:    a.maxTokens,
+		tools:        a.tools,
+		memory:       memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     a.eventBus,
+	}
 }
 
 func (a *agent) WithSystemPrompt(prompt string) Agent {
-	newAgent := *a
-	newAgent.systemPrompt = prompt
-	return &newAgent
+	return &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: prompt,
+		temperature:  a.temperature,
+		maxTokens:    a.maxTokens,
+		tools:        a.tools,
+		memory:       a.memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     a.eventBus,
+	}
 }
 
 func (a *agent) WithTemperature(temp float64) Agent {
-	newAgent := *a
-	newAgent.temperature = temp
-	return &newAgent
+	return &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: a.systemPrompt,
+		temperature:  temp,
+		maxTokens:    a.maxTokens,
+		tools:        a.tools,
+		memory:       a.memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     a.eventBus,
+	}
 }
 
 func (a *agent) WithMaxTokens(tokens int) Agent {
-	newAgent := *a
-	newAgent.maxTokens = tokens
-	return &newAgent
+	return &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: a.systemPrompt,
+		temperature:  a.temperature,
+		maxTokens:    tokens,
+		tools:        a.tools,
+		memory:       a.memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     a.eventBus,
+	}
+}
+
+func (a *agent) WithEventBus(eventBus EventBus) Agent {
+	return &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: a.systemPrompt,
+		temperature:  a.temperature,
+		maxTokens:    a.maxTokens,
+		tools:        a.tools,
+		memory:       a.memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     eventBus,
+	}
 }
 
 func (a *agent) SetState(key string, value interface{}) {
@@ -189,6 +269,40 @@ func (a *agent) Name() string {
 
 func (a *agent) Model() string {
 	return a.model
+}
+
+// Event-related methods
+func (a *agent) GetEventBus() EventBus {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.eventBus
+}
+
+func (a *agent) StreamEvents(ctx context.Context, eventTypes ...EventType) (<-chan Event, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.eventBus == nil {
+		return nil, fmt.Errorf("no event bus configured")
+	}
+
+	if streamBus, ok := a.eventBus.(StreamEventBus); ok {
+		return streamBus.Stream(ctx, eventTypes...)
+	}
+
+	return nil, fmt.Errorf("event bus does not support streaming")
+}
+
+func (a *agent) PublishEvent(ctx context.Context, eventType EventType, data map[string]interface{}) error {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.eventBus == nil {
+		return nil // Silently ignore if no event bus
+	}
+
+	event := NewEvent(eventType, a.Name(), data)
+	return a.eventBus.Publish(ctx, event)
 }
 
 func (a *agent) prepareMessages(ctx context.Context, currentMessage string) ([]ChatMessage, error) {

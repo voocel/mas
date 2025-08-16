@@ -150,11 +150,16 @@ type Agent interface {
 	WithSystemPrompt(prompt string) Agent
 	WithTemperature(temp float64) Agent
 	WithMaxTokens(tokens int) Agent
+	WithEventBus(eventBus EventBus) Agent
 	SetState(key string, value interface{})
 	GetState(key string) interface{}
 	ClearState()
 	Name() string
 	Model() string
+
+	GetEventBus() EventBus
+	StreamEvents(ctx context.Context, eventTypes ...EventType) (<-chan Event, error)
+	PublishEvent(ctx context.Context, eventType EventType, data map[string]interface{}) error
 }
 
 // Memory represents the memory system for agents
@@ -178,9 +183,14 @@ type WorkflowBuilder interface {
 	SetStart(nodeID string) WorkflowBuilder
 	AddConditionalRoute(fromNodeID string, condition func(*WorkflowContext) bool, trueTarget, falseTarget string) WorkflowBuilder
 	WithCheckpointer(checkpointer Checkpointer) WorkflowBuilder
+	WithEventBus(eventBus EventBus) WorkflowBuilder
 	Execute(ctx context.Context, initialData map[string]any) (*WorkflowContext, error)
 	ExecuteWithCheckpoint(ctx context.Context, initialData map[string]any) (*WorkflowContext, error)
 	ResumeFromCheckpoint(ctx context.Context, workflowID string) (*WorkflowContext, error)
+
+	GetEventBus() EventBus
+	StreamEvents(ctx context.Context, eventTypes ...EventType) (<-chan Event, error)
+	ExecuteWithEvents(ctx context.Context, initialData map[string]any) (*WorkflowContext, <-chan Event, error)
 }
 
 // Provider represents an LLM provider

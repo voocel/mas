@@ -13,6 +13,7 @@ type workflowBuilder struct {
 	startNode         string
 	conditionalRoutes map[string]*conditionalRoute
 	checkpointer      Checkpointer
+	eventBus          EventBus // 可选的事件总线
 	mu                sync.RWMutex
 }
 
@@ -217,9 +218,48 @@ func (b *workflowBuilder) WithCheckpointer(checkpointer Checkpointer) WorkflowBu
 	return b
 }
 
+func (b *workflowBuilder) WithEventBus(eventBus EventBus) WorkflowBuilder {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.eventBus = eventBus
+
+	// Propagate event bus to nodes
+	b.propagateEventBus()
+
+	return b
+}
+
 func (b *workflowBuilder) Execute(ctx context.Context, initialData map[string]any) (*WorkflowContext, error) {
+	// Emit workflow start event
+	if err := b.publishEvent(ctx, EventWorkflowStart, EventData(
+		"initial_data", initialData,
+	)); err != nil {
+		fmt.Printf("Failed to publish workflow start event: %v\n", err)
+	}
+
 	wfCtx := NewWorkflowContext(generateWorkflowID(), initialData)
-	return b.executeFrom(ctx, b.startNode, wfCtx)
+	result, err := b.executeFrom(ctx, b.startNode, wfCtx)
+
+	// Emit workflow end event
+	eventData := EventData(
+		"initial_data", initialData,
+		"final_data", result.GetData(),
+		"success", err == nil,
+	)
+
+	var eventType EventType
+	if err != nil {
+		eventType = EventWorkflowError
+		eventData["error"] = err.Error()
+	} else {
+		eventType = EventWorkflowEnd
+	}
+
+	if publishErr := b.publishEvent(ctx, eventType, eventData); publishErr != nil {
+		fmt.Printf("Failed to publish workflow end event: %v\n", publishErr)
+	}
+
+	return result, err
 }
 
 func (b *workflowBuilder) ExecuteWithCheckpoint(ctx context.Context, initialData map[string]any) (*WorkflowContext, error) {
@@ -519,5 +559,72 @@ func When(check func(*WorkflowContext) bool, target string) Condition {
 	return Condition{
 		Check:  check,
 		Target: target,
+	}
+}
+
+// Event-related methods for WorkflowBuilder
+func (b *workflowBuilder) GetEventBus() EventBus {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.eventBus
+}
+
+func (b *workflowBuilder) StreamEvents(ctx context.Context, eventTypes ...EventType) (<-chan Event, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if b.eventBus == nil {
+		return nil, fmt.Errorf("no event bus configured")
+	}
+
+	if streamBus, ok := b.eventBus.(StreamEventBus); ok {
+		return streamBus.Stream(ctx, eventTypes...)
+	}
+
+	return nil, fmt.Errorf("event bus does not support streaming")
+}
+
+func (b *workflowBuilder) ExecuteWithEvents(ctx context.Context, initialData map[string]any) (*WorkflowContext, <-chan Event, error) {
+	// Get event stream first
+	eventStream, err := b.StreamEvents(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create event stream: %w", err)
+	}
+
+	// Execute workflow
+	result, err := b.Execute(ctx, initialData)
+
+	return result, eventStream, err
+}
+
+// publishEvent is a helper to publish events
+func (b *workflowBuilder) publishEvent(ctx context.Context, eventType EventType, data map[string]interface{}) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if b.eventBus == nil {
+		return nil // Silently ignore if no event bus
+	}
+
+	event := NewEvent(eventType, "workflow", data)
+	return b.eventBus.Publish(ctx, event)
+}
+
+// propagateEventBus propagates event bus to all nodes
+func (b *workflowBuilder) propagateEventBus() {
+	for _, node := range b.nodes {
+		b.propagateEventBusToNode(node)
+	}
+}
+
+// propagateEventBusToNode propagates event bus to a specific node
+func (b *workflowBuilder) propagateEventBusToNode(node WorkflowNode) {
+	if b.eventBus == nil {
+		return
+	}
+
+	switch n := node.(type) {
+	case *agentNode:
+		n.agent = n.agent.WithEventBus(b.eventBus)
 	}
 }

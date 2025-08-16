@@ -24,8 +24,62 @@ MAS (Multi-Agent System) is a lightweight, elegant multi-agent framework for Go,
 - **Tool System**: Extensible tool framework with sandbox security
 - **Memory Management**: Conversation and summary memory implementations
 - **LLM Integration**: Built on [litellm](https://github.com/voocel/litellm) for multiple providers
+- **Checkpoint & Recovery**: Advanced workflow persistence and recovery system
+  - **Automatic Checkpointing**: Saves state at key points
+  - **Smart Recovery**: Resumes from interruption point
+  - **Multiple Storage Options**: File, memory, database
+  - **Compression Support**: Efficient storage
+  - **Error Handling**: Graceful failure recovery
 - **Lightweight**: Minimal dependencies, easy to embed
 - **Fluent API**: Chain-able configuration methods
+
+## Architecture
+
+```
+mas/
+├── agent.go            # Core Agent implementation with LLM integration
+├── workflow.go         # Workflow orchestration and state management  
+├── tool.go             # Tool framework and interface
+├── memory.go           # Memory systems (conversation, summary)
+├── checkpoint.go       # Checkpoint interfaces and utilities
+├── types.go            # Core type definitions and interfaces
+├── errors.go           # Error types and handling
+├── agent/              # Agent implementation details
+│   ├── agent.go        # Core Agent Implementation
+│   ├── execution.go    # Tool Invocation Logic
+│   └── config.go       # Config
+├── workflow/           # Workflow execution engine
+│   ├── builder.go      # Workflow Builder
+│   ├── context.go      # Workflow Context
+│   ├── executor.go     # Execution Engine
+│   ├── nodes.go        # All node type implementations
+│   └── routing.go      # Conditional Routing
+├── llm/                # LLM provider abstraction
+│   ├── provider.go     # Provider interface and factories
+│   ├── litellm.go      # LiteLLM adapter implementation
+│   ├── types.go        # LLM-specific types
+│   └── converter.go    # Format conversion utilities
+├── memory/             # Memory implementations
+│   ├── conversation.go # Conversation memory
+│   ├── summary.go      # Summary memory with compression
+│   └── config.go       # Memory configuration
+├── checkpoint/         # Checkpoint system
+│   ├── manager.go      # Checkpoint manager
+│   ├── store.go        # Storage interface
+│   ├── file.go         # File storage backend
+│   ├── memory.go       # In-memory storage
+│   ├── redis.go        # Redis storage (+build redis)
+│   └── sqlite.go       # SQLite storage (+build sqlite)
+├── tools/              # Built-in tool ecosystem
+├── examples/           # Usage examples
+│   ├── basic/          # Basic agent usage
+│   ├── workflow/       # Multi-agent workflows
+│   ├── tools/          # Custom tools and multiple tools
+│   ├── baseurl/        # Custom API endpoints
+│   ├── checkpoint/     # Checkpoint and recovery
+│   └── verify/         # Installation verification
+└── internal/           # Internal utilities
+```
 
 ## Quick Start
 
@@ -65,40 +119,68 @@ func main() {
 ### With Tools and Memory
 
 ```go
-import (
-    "github.com/voocel/mas"
-    "github.com/voocel/mas/tools"
-    "github.com/voocel/mas/memory"
-)
-
 func main() {
-    agent := mas.NewAgent("o3", os.Getenv("OPENAI_API_KEY")).
-        WithTools(tools.Calculator(), tools.WebSearch()).
-        WithMemory(memory.Conversation(10)).
+    // Create a custom tool
+    greetingTool := mas.NewSimpleTool("greeting", "Generate a greeting", 
+        func(ctx context.Context, params map[string]any) (any, error) {
+            return "Hello, World!", nil
+        })
+
+    agent := mas.NewAgent("gpt-4", os.Getenv("OPENAI_API_KEY")).
+        WithTools(greetingTool).
+        WithMemory(mas.NewConversationMemory(10)).
         WithSystemPrompt("You are a helpful research assistant.")
     
-    response, err := agent.Chat(context.Background(), 
-        "Calculate 15% of 250, then search for information about percentages")
-    // Agent will use calculator tool and web search automatically
+    response, _ := agent.Chat(context.Background(), "Use the greeting tool")
+    fmt.Println(response)
 }
 ```
 
-### File Tools with Sandbox
+### Custom Base URL (DeepSeek, Ollama, Azure OpenAI, etc.)
 
 ```go
-// Unrestricted access
-tools.FileReader()
-
-// Current directory only
-sandbox := tools.DefaultSandbox()
-tools.FileReaderWithSandbox(sandbox)
-
-// Custom allowed paths
-sandbox := &tools.FileSandbox{
-    AllowedPaths: []string{"./data", "./uploads"},
-    AllowCurrentDir: false,
+func main() {
+    // Using custom OpenAI-compatible API
+    config := mas.AgentConfig{
+        Name:        "DeepSeekAgent",
+        Model:       "deepseek-chat",
+        APIKey:      os.Getenv("DEEPSEEK_API_KEY"),
+        BaseURL:     "https://api.deepseek.com/v1",  // Custom endpoint
+        Temperature: 0.7,
+        MaxTokens:   1000,
+    }
+    
+    agent := mas.NewAgentWithConfig(config)
+    response, _ := agent.Chat(context.Background(), "Hello!")
+    fmt.Println(response)
 }
-tools.FileWriterWithSandbox(sandbox)
+```
+
+**Supported Custom Endpoints:**
+- DeepSeek: `https://api.deepseek.com/v1`
+- Local Ollama: `http://localhost:11434/v1`
+- Azure OpenAI: `https://your-resource.openai.azure.com/openai/deployments/gpt-4`
+- Any OpenAI-compatible API
+
+## Examples
+
+Run the examples to see MAS in action:
+
+```bash
+# Basic agent usage
+cd examples/basic && go run main.go
+
+# Multi-agent workflows  
+cd examples/workflow && go run main.go
+
+# Custom tools and multiple tools
+cd examples/tools && go run main.go
+
+# Custom base URL configuration
+cd examples/baseurl && go run main.go
+
+# Verify framework installation
+cd examples/verify && go run main.go
 ```
 
 ### Multi-Agent Workflows
@@ -106,10 +188,10 @@ tools.FileWriterWithSandbox(sandbox)
 ```go
 func main() {
     // Create specialized agents
-    researcher := mas.NewAgent("gemini-2.5-pro", apiKey).
+    researcher := mas.NewAgent("gpt-4", apiKey).
         WithSystemPrompt("You are a researcher.")
 
-    writer := mas.NewAgent("claude-4-sonnet", apiKey).
+    writer := mas.NewAgent("gpt-4", apiKey).
         WithSystemPrompt("You are a writer.")
 
     // Create workflow with state graph
@@ -119,13 +201,11 @@ func main() {
         AddEdge("researcher", "writer").
         SetStart("researcher")
 
-    state, err := workflow.Execute(context.Background(), initialState)
+    result, err := workflow.Execute(context.Background(), map[string]any{
+        "input": "Research AI trends and write a summary",
+    })
 }
 ```
-
-### Conditional Routing
-
-```go
 // Simple conditional routing
 workflow.AddConditionalRoute("classifier",
     func(ctx *mas.WorkflowContext) bool {

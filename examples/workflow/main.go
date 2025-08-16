@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/voocel/mas"
-	"github.com/voocel/mas/tools"
 )
 
 func main() {
@@ -22,28 +20,35 @@ func main() {
 	// Demo 1: Simple sequential workflow
 	simpleWorkflowDemo(apiKey)
 
-	// Demo 2: Parallel execution
-	parallelWorkflowDemo(apiKey)
-
-	// Demo 3: Tool integration
-	toolWorkflowDemo(apiKey)
-
-	// Demo 4: Conditional routing
-	conditionalRoutingDemo(apiKey)
-
-	// Demo 5: Human-in-the-Loop
-	humanInTheLoopDemo(apiKey)
+	//// Demo 2: Parallel execution
+	//parallelWorkflowDemo(apiKey)
+	//
+	//// Demo 3: Tool integration
+	//toolWorkflowDemo(apiKey)
+	//
+	//// Demo 4: Conditional routing
+	//conditionalRoutingDemo(apiKey)
+	//
+	//// Demo 5: Human-in-the-Loop
+	//humanInTheLoopDemo(apiKey)
 }
 
 // simpleWorkflowDemo shows a basic sequential workflow
 func simpleWorkflowDemo(apiKey string) {
 	fmt.Println("\n1. Simple Sequential Workflow:")
-
+	customConfig := mas.AgentConfig{
+		Name:        "CustomAgent",
+		Model:       "gpt-4.1-mini",
+		APIKey:      apiKey,
+		BaseURL:     os.Getenv("OPENAI_BASE_URL"),
+		Temperature: 0.7,
+		MaxTokens:   1000,
+	}
 	// Create agents
-	researcher := mas.NewAgent("gpt-4.1", apiKey).
+	researcher := mas.NewAgentWithConfig(customConfig).
 		WithSystemPrompt("You are a researcher. Analyze the given topic briefly.")
 
-	writer := mas.NewAgent("gpt-4.1", apiKey).
+	writer := mas.NewAgentWithConfig(customConfig).
 		WithSystemPrompt("You are a writer. Create content based on research.")
 
 	// Build workflow with fluent API
@@ -108,44 +113,7 @@ func parallelWorkflowDemo(apiKey string) {
 // toolWorkflowDemo shows tool integration
 func toolWorkflowDemo(apiKey string) {
 	fmt.Println("\n3. Tool Integration Workflow:")
-
-	// Create agent and tool nodes
-	planner := mas.NewAgent("gpt-4.1", apiKey).
-		WithSystemPrompt("You are a planner. Create a calculation plan.")
-
-	calculator := mas.NewToolNode("calc", tools.Calculator()).
-		WithParams(map[string]any{
-			"operation": "multiply",
-			"a":         123,
-			"b":         456,
-		})
-
-	reporter := mas.NewAgent("gpt-4.1", apiKey).
-		WithSystemPrompt("You are a reporter. Summarize the calculation result.")
-
-	// Build workflow
-	workflow := mas.NewWorkflow().
-		AddNode(mas.NewAgentNode("planner", planner)).
-		AddNode(calculator).
-		AddNode(mas.NewAgentNode("reporter", reporter)).
-		AddEdge("planner", "calc").
-		AddEdge("calc", "reporter").
-		SetStart("planner")
-
-	// Execute
-	ctx := context.Background()
-	initialData := map[string]any{
-		"input": "Calculate 123 * 456 and explain the result",
-	}
-
-	result, err := workflow.Execute(ctx, initialData)
-	if err != nil {
-		log.Printf("Error: %v", err)
-		return
-	}
-
-	fmt.Printf("Tool workflow completed. Result: %v\n", result.Get("tool_result"))
-	fmt.Printf("Final report: %v\n", result.Get("output"))
+	fmt.Println("(Tool integration demo skipped - tools package not implemented yet)")
 }
 
 // conditionalRoutingDemo shows conditional workflow routing
@@ -207,8 +175,7 @@ func humanInTheLoopDemo(apiKey string) {
 	// Build workflow with human approval
 	workflow := mas.NewWorkflow().
 		AddNode(mas.NewAgentNode("drafter", drafter)).
-		AddNode(mas.NewHumanNode("reviewer", "Please review the content and provide feedback:", humanProvider).
-			WithOptions(mas.WithTimeout(2*time.Minute))).
+		AddNode(mas.NewHumanNode("reviewer", "Please review the content and provide feedback:", humanProvider)).
 		AddNode(mas.NewAgentNode("finalizer", finalizer)).
 		AddEdge("drafter", "reviewer").
 		AddEdge("reviewer", "finalizer").

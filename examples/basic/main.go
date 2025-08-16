@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/voocel/mas"
-	"github.com/voocel/mas/memory"
 )
 
 func main() {
@@ -40,8 +39,16 @@ func main() {
 
 // simpleChat demonstrates basic agent usage
 func simpleChat(apiKey string) {
+	customConfig := mas.AgentConfig{
+		Name:        "CustomAgent",
+		Model:       "gpt-4.1-mini",
+		APIKey:      apiKey,
+		BaseURL:     os.Getenv("OPENAI_BASE_URL"),
+		Temperature: 0.7,
+		MaxTokens:   1000,
+	}
 	// Create a simple agent
-	agent := mas.NewAgent("gpt-4", apiKey)
+	agent := mas.NewAgentWithConfig(customConfig)
 
 	// Chat with the agent
 	response, err := agent.Chat(context.Background(), "Hello! Please introduce yourself.")
@@ -57,7 +64,7 @@ func simpleChat(apiKey string) {
 func chatWithMemory(apiKey string) {
 	// Create agent with conversation memory
 	agent := mas.NewAgent("gpt-4", apiKey).
-		WithMemory(memory.Conversation(10)) // Remember last 10 messages
+		WithMemory(mas.NewConversationMemory(10)) // Remember last 10 messages
 
 	ctx := context.Background()
 
@@ -105,7 +112,7 @@ func configurationOptions(apiKey string) {
 		SystemPrompt: "You are a creative writing assistant.",
 		Temperature:  0.8, // Higher temperature for more creativity
 		MaxTokens:    300,
-		Memory:       memory.Conversation(5),
+		Memory:       mas.NewConversationMemory(5),
 		State:        make(map[string]interface{}),
 	}
 
@@ -127,42 +134,4 @@ func configurationOptions(apiKey string) {
 	fmt.Printf("Agent Name: %s\n", agent.Name())
 	fmt.Printf("Agent Model: %s\n", agent.Model())
 	fmt.Printf("Genre Setting: %v\n", agent.GetState("genre"))
-}
-
-// errorHandling demonstrates error handling patterns
-func errorHandling(apiKey string) {
-	fmt.Println("\n5. Error Handling Example:")
-
-	// Example with invalid API key
-	invalidAgent := mas.NewAgent("gpt-4", "invalid-key")
-	_, err := invalidAgent.Chat(context.Background(), "Hello")
-	if err != nil {
-		fmt.Printf("Expected error with invalid API key: %v\n", err)
-	}
-
-	// Example with empty message
-	agent := mas.NewAgent("gpt-4", apiKey)
-	_, err = agent.Chat(context.Background(), "")
-	if err != nil {
-		fmt.Printf("Error with empty message: %v\n", err)
-	}
-}
-
-// performanceExample demonstrates performance considerations
-func performanceExample(apiKey string) {
-	fmt.Println("\n6. Performance Example:")
-
-	agent := mas.NewAgent("gpt-4", apiKey).
-		WithMaxTokens(100). // Limit tokens for faster response
-		WithTemperature(0.1) // Lower temperature for more deterministic responses
-
-	start := context.Background()
-
-	response, err := agent.Chat(start, "What is 2+2? Give a brief answer.")
-	if err != nil {
-		log.Printf("Error: %v", err)
-		return
-	}
-
-	fmt.Printf("Quick Response: %s\n", response)
 }

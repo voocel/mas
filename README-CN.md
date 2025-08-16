@@ -24,8 +24,62 @@ MAS (Multi-Agent System) 是一个轻量级、优雅的Go多智能体框架，�
 - **工具系统**: 可扩展的工具框架，支持沙箱安全
 - **内存管理**: 对话和摘要内存实现
 - **LLM集成**: 基于 [litellm](https://github.com/voocel/litellm) 支持多个提供商
+- **检查点与恢复**: 高级工作流持久化和恢复系统
+  - **自动检查点**: 在关键点自动保存状态
+  - **智能恢复**: 从中断点继续执行
+  - **多种存储选项**: 文件、内存、数据库
+  - **压缩支持**: 高效存储
+  - **错误处理**: 优雅的故障恢复
 - **轻量级**: 最少依赖，易于嵌入
 - **流式API**: 可链式调用的配置方法
+
+## 架构
+
+```
+mas/
+├── agent.go            # 核心Agent实现，LLM集成
+├── workflow.go         # 工作流编排和状态管理
+├── tool.go             # 工具框架和接口
+├── memory.go           # 内存系统（对话、摘要）
+├── checkpoint.go       # 检查点接口和工具
+├── types.go            # 核心类型定义和接口
+├── errors.go           # 错误类型和处理
+├── agent/              # Agent实现细节
+│   ├── agent.go          # 核心Agent实现
+│   ├── execution.go      # 工具调用执行逻辑
+│   └── config.go         # 配置管理
+├── workflow/           # 工作流执行引擎
+│   ├── builder.go        # WorkflowBuilder实现
+│   ├── context.go        # WorkflowContext实现
+│   ├── executor.go       # 执行引擎
+│   ├── nodes.go          # 所有节点类型实现
+│   └── routing.go        # 条件路由逻辑
+├── llm/                # LLM提供商抽象
+│   ├── provider.go     # 提供商接口和工厂
+│   ├── litellm.go      # LiteLLM适配器实现
+│   ├── types.go        # LLM特定类型
+│   └── converter.go    # 格式转换工具
+├── memory/             # 内存实现
+│   ├── conversation.go # 对话内存
+│   ├── summary.go      # 带压缩的摘要内存
+│   └── config.go       # 内存配置
+├── checkpoint/         # 检查点系统
+│   ├── manager.go      # 检查点管理器
+│   ├── store.go        # 存储接口
+│   ├── file.go         # 文件存储后端
+│   ├── memory.go       # 内存存储
+│   ├── redis.go        # Redis存储 (+build redis)
+│   └── sqlite.go       # SQLite存储 (+build sqlite)
+├── tools/              # 内置工具生态系统
+├── examples/           # 使用示例
+│   ├── basic/          # 基础智能体使用
+│   ├── workflow/       # 多智能体工作流
+│   ├── tools/          # 自定义工具和多工具使用
+│   ├── baseurl/        # 自定义API端点
+│   ├── checkpoint/     # 检查点和恢复
+│   └── verify/         # 安装验证
+└── internal/           # 内部工具
+```
 
 ## 快速开始
 
@@ -65,22 +119,68 @@ func main() {
 ### 使用工具和内存
 
 ```go
-import (
-    "github.com/voocel/mas"
-    "github.com/voocel/mas/tools"
-    "github.com/voocel/mas/memory"
-)
-
 func main() {
-    agent := mas.NewAgent("o3", os.Getenv("OPENAI_API_KEY")).
-        WithTools(tools.Calculator(), tools.WebSearch()).
-        WithMemory(memory.Conversation(10)).
+    // 创建自定义工具
+    greetingTool := mas.NewSimpleTool("greeting", "生成问候语", 
+        func(ctx context.Context, params map[string]any) (any, error) {
+            return "你好，世界！", nil
+        })
+
+    agent := mas.NewAgent("gpt-4", os.Getenv("OPENAI_API_KEY")).
+        WithTools(greetingTool).
+        WithMemory(mas.NewConversationMemory(10)).
         WithSystemPrompt("你是一个有用的研究助手。")
     
-    response, err := agent.Chat(context.Background(), 
-        "计算250的15%，然后搜索有关百分比的信息")
-    // 智能体将自动使用计算器工具和网络搜索
+    response, _ := agent.Chat(context.Background(), "使用问候工具")
+    fmt.Println(response)
 }
+```
+
+### 自定义Base URL (DeepSeek、Ollama、Azure OpenAI等)
+
+```go
+func main() {
+    // 使用自定义OpenAI兼容API
+    config := mas.AgentConfig{
+        Name:        "DeepSeekAgent",
+        Model:       "deepseek-chat",
+        APIKey:      os.Getenv("DEEPSEEK_API_KEY"),
+        BaseURL:     "https://api.deepseek.com/v1",  // 自定义端点
+        Temperature: 0.7,
+        MaxTokens:   1000,
+    }
+    
+    agent := mas.NewAgentWithConfig(config)
+    response, _ := agent.Chat(context.Background(), "你好！")
+    fmt.Println(response)
+}
+```
+
+**支持的自定义端点：**
+- DeepSeek: `https://api.deepseek.com/v1`
+- 本地Ollama: `http://localhost:11434/v1`
+- Azure OpenAI: `https://your-resource.openai.azure.com/openai/deployments/gpt-4`
+- 任何OpenAI兼容的API
+
+## 示例
+
+运行示例来查看MAS的实际应用：
+
+```bash
+# 基础智能体使用
+cd examples/basic && go run main.go
+
+# 多智能体工作流
+cd examples/workflow && go run main.go
+
+# 自定义工具和多工具使用
+cd examples/tools && go run main.go
+
+# 自定义base URL配置
+cd examples/baseurl && go run main.go
+
+# 验证框架安装
+cd examples/verify && go run main.go
 ```
 
 ### 文件工具沙箱

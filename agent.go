@@ -4,47 +4,74 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/voocel/mas/llm"
 )
 
-// Agent represents an intelligent agent that can chat, use tools, and maintain memory
-type Agent interface {
-	// Core chat functionality
-	Chat(ctx context.Context, message string) (string, error)
-
-	// Fluent configuration methods
-	WithTools(tools ...Tool) Agent
-	WithMemory(memory Memory) Agent
-	WithSystemPrompt(prompt string) Agent
-	WithTemperature(temp float64) Agent
-	WithMaxTokens(tokens int) Agent
-
-	// State management
-	SetState(key string, value interface{})
-	GetState(key string) interface{}
-	ClearState()
-
-	// Information methods
-	Name() string
-	Model() string
+type agent struct {
+	name         string
+	model        string
+	systemPrompt string
+	temperature  float64
+	maxTokens    int
+	tools        []Tool
+	memory       Memory
+	state        map[string]interface{}
+	provider     llm.Provider
+	mu           sync.RWMutex
 }
 
-// AgentConfig contains configuration for creating an agent
-type AgentConfig struct {
-	Name         string
-	Model        string
-	APIKey       string
-	SystemPrompt string
-	Temperature  float64
-	MaxTokens    int
-	Tools        []Tool
-	Memory       Memory
-	State        map[string]interface{}
-	Provider     llm.Provider
+func NewAgent(model, apiKey string) Agent {
+	provider, err := llm.NewProvider(model, apiKey)
+	if err != nil {
+		provider = nil
+	}
+
+	return &agent{
+		name:        "assistant",
+		model:       model,
+		temperature: 0.7,
+		maxTokens:   2000,
+		tools:       make([]Tool, 0),
+		state:       make(map[string]interface{}),
+		provider:    provider,
+	}
 }
 
-// DefaultAgentConfig returns a default configuration
+func NewAgentWithConfig(config AgentConfig) Agent {
+	var provider llm.Provider
+	if config.Provider != nil {
+		provider = nil
+	}
+	if provider == nil && config.APIKey != "" {
+		providerConfig := llm.ProviderConfig{
+			Model:       config.Model,
+			APIKey:      config.APIKey,
+			BaseURL:     config.BaseURL,
+			Temperature: config.Temperature,
+			MaxTokens:   config.MaxTokens,
+		}
+		provider, _ = llm.NewProviderWithConfig(providerConfig)
+	}
+
+	if config.State == nil {
+		config.State = make(map[string]interface{})
+	}
+
+	return &agent{
+		name:         config.Name,
+		model:        config.Model,
+		systemPrompt: config.SystemPrompt,
+		temperature:  config.Temperature,
+		maxTokens:    config.MaxTokens,
+		tools:        config.Tools,
+		memory:       config.Memory,
+		state:        config.State,
+		provider:     provider,
+	}
+}
+
 func DefaultAgentConfig() AgentConfig {
 	return AgentConfig{
 		Name:        "assistant",
@@ -55,104 +82,52 @@ func DefaultAgentConfig() AgentConfig {
 	}
 }
 
-// NewAgent creates a new agent with minimal configuration
-func NewAgent(model, apiKey string) Agent {
-	config := DefaultAgentConfig()
-	config.Model = model
-	config.APIKey = apiKey
-
-	// Create LLM provider
-	provider, err := llm.NewProvider(model, apiKey)
-	if err != nil {
-		// For now, we'll create a fallback provider
-		// In production, this should be handled more gracefully
-		provider = nil
-	}
-	config.Provider = provider
-
-	return NewAgentWithConfig(config)
-}
-
-// NewAgentWithConfig creates a new agent with full configuration
-func NewAgentWithConfig(config AgentConfig) Agent {
-	if config.State == nil {
-		config.State = make(map[string]interface{})
-	}
-
-	// Create provider if not provided
-	if config.Provider == nil && config.APIKey != "" {
-		provider, err := llm.NewProvider(config.Model, config.APIKey)
-		if err == nil {
-			config.Provider = provider
-		}
-	}
-
-	return &agent{
-		config: config,
-	}
-}
-
-// agent is the default implementation of the Agent interface
-type agent struct {
-	config AgentConfig
-}
-
-// Chat implements the core chat functionality
 func (a *agent) Chat(ctx context.Context, message string) (string, error) {
-	if a.config.Provider == nil {
+	if a.provider == nil {
 		return "", fmt.Errorf("no LLM provider configured")
 	}
 
-	// Add user message to memory if available
-	if a.config.Memory != nil {
-		err := a.config.Memory.Add(ctx, RoleUser, message)
-		if err != nil {
+	if a.memory != nil {
+		if err := a.memory.Add(ctx, RoleUser, message); err != nil {
 			return "", fmt.Errorf("failed to add message to memory: %w", err)
 		}
 	}
 
-	// Prepare messages for LLM
 	messages, err := a.prepareMessages(ctx, message)
 	if err != nil {
 		return "", fmt.Errorf("failed to prepare messages: %w", err)
 	}
 
-	// Prepare tools for function calling if available
 	var tools []llm.ToolDefinition
-	if len(a.config.Tools) > 0 {
+	if len(a.tools) > 0 {
 		tools = a.convertToolsToLLMFormat()
 	}
 
-	// Create chat request
 	req := llm.ChatRequest{
-		Messages:    messages,
-		Model:       a.config.Model,
-		Temperature: a.config.Temperature,
-		MaxTokens:   a.config.MaxTokens,
+		Messages:    a.convertMessagesToLLM(messages),
+		Model:       a.model,
+		Temperature: a.temperature,
+		MaxTokens:   a.maxTokens,
 		Tools:       tools,
 	}
 
-	// Call LLM
-	response, err := a.config.Provider.Chat(ctx, req)
+	resp, err := a.provider.Chat(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("LLM call failed: %w", err)
 	}
 
-	if len(response.Choices) == 0 {
+	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("no response choices returned")
 	}
 
-	choice := response.Choices[0]
+	choice := resp.Choices[0]
 
-	// Handle tool calls if present
 	if len(choice.Message.ToolCalls) > 0 {
-		return a.handleToolCalls(ctx, choice.Message, messages)
+		return a.handleToolCalls(ctx, a.convertMessageFromLLM(choice.Message), messages)
 	}
 
-	// Add assistant response to memory
-	if a.config.Memory != nil {
-		err := a.config.Memory.Add(ctx, RoleAssistant, choice.Message.Content)
-		if err != nil {
+	if a.memory != nil {
+		if err := a.memory.Add(ctx, RoleAssistant, choice.Message.Content); err != nil {
 			return "", fmt.Errorf("failed to add response to memory: %w", err)
 		}
 	}
@@ -160,80 +135,79 @@ func (a *agent) Chat(ctx context.Context, message string) (string, error) {
 	return choice.Message.Content, nil
 }
 
-// Fluent configuration methods
 func (a *agent) WithTools(tools ...Tool) Agent {
-	newConfig := a.config
-	newConfig.Tools = append(newConfig.Tools, tools...)
-	return &agent{config: newConfig}
+	newAgent := *a
+	newAgent.tools = append(newAgent.tools, tools...)
+	return &newAgent
 }
 
 func (a *agent) WithMemory(memory Memory) Agent {
-	newConfig := a.config
-	newConfig.Memory = memory
-	return &agent{config: newConfig}
+	newAgent := *a
+	newAgent.memory = memory
+	return &newAgent
 }
 
 func (a *agent) WithSystemPrompt(prompt string) Agent {
-	newConfig := a.config
-	newConfig.SystemPrompt = prompt
-	return &agent{config: newConfig}
+	newAgent := *a
+	newAgent.systemPrompt = prompt
+	return &newAgent
 }
 
 func (a *agent) WithTemperature(temp float64) Agent {
-	newConfig := a.config
-	newConfig.Temperature = temp
-	return &agent{config: newConfig}
+	newAgent := *a
+	newAgent.temperature = temp
+	return &newAgent
 }
 
 func (a *agent) WithMaxTokens(tokens int) Agent {
-	newConfig := a.config
-	newConfig.MaxTokens = tokens
-	return &agent{config: newConfig}
+	newAgent := *a
+	newAgent.maxTokens = tokens
+	return &newAgent
 }
 
-// State management
 func (a *agent) SetState(key string, value interface{}) {
-	a.config.State[key] = value
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state[key] = value
 }
 
 func (a *agent) GetState(key string) interface{} {
-	return a.config.State[key]
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.state[key]
 }
 
 func (a *agent) ClearState() {
-	a.config.State = make(map[string]interface{})
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state = make(map[string]interface{})
 }
 
 func (a *agent) Name() string {
-	return a.config.Name
+	return a.name
 }
 
 func (a *agent) Model() string {
-	return a.config.Model
+	return a.model
 }
 
-// prepareMessages prepares the message list for LLM API call
-func (a *agent) prepareMessages(ctx context.Context, currentMessage string) ([]llm.Message, error) {
-	var messages []llm.Message
-
-	// Add system prompt if available
-	if a.config.SystemPrompt != "" {
-		messages = append(messages, llm.Message{
-			Role:    "system",
-			Content: a.config.SystemPrompt,
+func (a *agent) prepareMessages(ctx context.Context, currentMessage string) ([]ChatMessage, error) {
+	var messages []ChatMessage
+	if a.systemPrompt != "" {
+		messages = append(messages, ChatMessage{
+			Role:    RoleSystem,
+			Content: a.systemPrompt,
 		})
 	}
 
-	// Add conversation history from memory
-	if a.config.Memory != nil {
-		history, err := a.config.Memory.GetHistory(ctx, 10) // Get last 10 messages
+	if a.memory != nil {
+		history, err := a.memory.GetHistory(ctx, 10)
 		if err == nil {
 			for _, msg := range history {
-				// Skip the current message if it's already in history
 				if msg.Role == RoleUser && msg.Content == currentMessage {
 					continue
 				}
-				messages = append(messages, llm.Message{
+				messages = append(messages, ChatMessage{
 					Role:    msg.Role,
 					Content: msg.Content,
 				})
@@ -241,10 +215,9 @@ func (a *agent) prepareMessages(ctx context.Context, currentMessage string) ([]l
 		}
 	}
 
-	// Add current message if not already added from memory
 	if !a.messageExistsInHistory(messages, currentMessage) {
-		messages = append(messages, llm.Message{
-			Role:    "user",
+		messages = append(messages, ChatMessage{
+			Role:    RoleUser,
 			Content: currentMessage,
 		})
 	}
@@ -252,21 +225,171 @@ func (a *agent) prepareMessages(ctx context.Context, currentMessage string) ([]l
 	return messages, nil
 }
 
-// messageExistsInHistory checks if a message already exists in the message history
-func (a *agent) messageExistsInHistory(messages []llm.Message, content string) bool {
+func (a *agent) messageExistsInHistory(messages []ChatMessage, content string) bool {
 	for _, msg := range messages {
-		if msg.Role == "user" && msg.Content == content {
+		if msg.Role == RoleUser && msg.Content == content {
 			return true
 		}
 	}
 	return false
 }
 
-// convertToolsToLLMFormat converts internal tools to LLM API format
+func (a *agent) handleToolCalls(ctx context.Context, assistantMessage ChatMessage, conversationHistory []ChatMessage) (string, error) {
+	if a.memory != nil {
+		toolCallsJSON, _ := json.Marshal(assistantMessage.ToolCalls)
+		if err := a.memory.Add(ctx, RoleAssistant, fmt.Sprintf("Tool calls: %s", string(toolCallsJSON))); err != nil {
+			return "", fmt.Errorf("failed to add tool calls to memory: %w", err)
+		}
+	}
+
+	var updatedMessages []ChatMessage
+	updatedMessages = append(updatedMessages, conversationHistory...)
+	updatedMessages = append(updatedMessages, assistantMessage)
+
+	for _, toolCall := range assistantMessage.ToolCalls {
+		if toolCall.Type != "function" {
+			continue
+		}
+
+		var selectedTool Tool
+		for _, tool := range a.tools {
+			if tool.Name() == toolCall.Function.Name {
+				selectedTool = tool
+				break
+			}
+		}
+
+		if selectedTool == nil {
+			result := fmt.Sprintf("Error: Tool '%s' not found", toolCall.Function.Name)
+			updatedMessages = append(updatedMessages, ChatMessage{
+				Role:       RoleTool,
+				Content:    result,
+				ToolCallID: toolCall.ID,
+			})
+			continue
+		}
+
+		var params map[string]interface{}
+		if toolCall.Function.Arguments != "" {
+			err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params)
+			if err != nil {
+				result := fmt.Sprintf("Error parsing tool parameters: %v", err)
+				updatedMessages = append(updatedMessages, ChatMessage{
+					Role:       RoleTool,
+					Content:    result,
+					ToolCallID: toolCall.ID,
+				})
+				continue
+			}
+		}
+
+		toolResult, err := selectedTool.Execute(ctx, params)
+		var result string
+		if err != nil {
+			result = fmt.Sprintf("Error executing tool: %v", err)
+		} else {
+			resultJSON, _ := json.Marshal(toolResult)
+			result = string(resultJSON)
+		}
+
+		updatedMessages = append(updatedMessages, ChatMessage{
+			Role:       RoleTool,
+			Content:    result,
+			ToolCallID: toolCall.ID,
+		})
+
+		if a.memory != nil {
+			if err := a.memory.Add(ctx, RoleTool, fmt.Sprintf("Tool '%s' result: %s", selectedTool.Name(), result)); err != nil {
+				return "", fmt.Errorf("failed to add tool result to memory: %w", err)
+			}
+		}
+	}
+
+	req := llm.ChatRequest{
+		Messages:    a.convertMessagesToLLM(updatedMessages),
+		Model:       a.model,
+		Temperature: a.temperature,
+		MaxTokens:   a.maxTokens,
+	}
+
+	resp, err := a.provider.Chat(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("LLM call after tool execution failed: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response choices returned after tool execution")
+	}
+
+	finalResponse := resp.Choices[0].Message.Content
+
+	if a.memory != nil {
+		if err := a.memory.Add(ctx, RoleAssistant, finalResponse); err != nil {
+			return "", fmt.Errorf("failed to add final response to memory: %w", err)
+		}
+	}
+
+	return finalResponse, nil
+}
+
+func (a *agent) convertMessagesToLLM(messages []ChatMessage) []llm.Message {
+	result := make([]llm.Message, len(messages))
+	for i, msg := range messages {
+		result[i] = llm.Message{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			Name:       msg.Name,
+			ToolCalls:  a.convertToolCallsToLLM(msg.ToolCalls),
+			ToolCallID: msg.ToolCallID,
+		}
+	}
+	return result
+}
+
+func (a *agent) convertMessageFromLLM(msg llm.Message) ChatMessage {
+	return ChatMessage{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		Name:       msg.Name,
+		ToolCalls:  a.convertToolCallsFromLLM(msg.ToolCalls),
+		ToolCallID: msg.ToolCallID,
+	}
+}
+
+func (a *agent) convertToolCallsToLLM(toolCalls []ToolCall) []llm.ToolCall {
+	result := make([]llm.ToolCall, len(toolCalls))
+	for i, tc := range toolCalls {
+		result[i] = llm.ToolCall{
+			ID:   tc.ID,
+			Type: tc.Type,
+			Function: llm.FunctionCall{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		}
+	}
+	return result
+}
+
+func (a *agent) convertToolCallsFromLLM(toolCalls []llm.ToolCall) []ToolCall {
+	result := make([]ToolCall, len(toolCalls))
+	for i, tc := range toolCalls {
+		result[i] = ToolCall{
+			ID:   tc.ID,
+			Type: tc.Type,
+			Function: FunctionCall{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		}
+	}
+	return result
+}
+
 func (a *agent) convertToolsToLLMFormat() []llm.ToolDefinition {
 	var tools []llm.ToolDefinition
 
-	for _, tool := range a.config.Tools {
+	for _, tool := range a.tools {
 		schema := tool.Schema()
 		parameters := make(map[string]interface{})
 
@@ -287,122 +410,4 @@ func (a *agent) convertToolsToLLMFormat() []llm.ToolDefinition {
 	}
 
 	return tools
-}
-
-// handleToolCalls processes tool calls from LLM response
-func (a *agent) handleToolCalls(ctx context.Context, assistantMessage llm.Message, conversationHistory []llm.Message) (string, error) {
-	// Add assistant message with tool calls to memory
-	if a.config.Memory != nil {
-		toolCallsJSON, _ := json.Marshal(assistantMessage.ToolCalls)
-		err := a.config.Memory.Add(ctx, RoleAssistant, fmt.Sprintf("Tool calls: %s", string(toolCallsJSON)))
-		if err != nil {
-			return "", fmt.Errorf("failed to add tool calls to memory: %w", err)
-		}
-	}
-
-	var toolResults []string
-	var updatedMessages []llm.Message
-	updatedMessages = append(updatedMessages, conversationHistory...)
-	updatedMessages = append(updatedMessages, assistantMessage)
-
-	// Execute each tool call
-	for _, toolCall := range assistantMessage.ToolCalls {
-		if toolCall.Type != "function" {
-			continue
-		}
-
-		var selectedTool Tool
-		for _, tool := range a.config.Tools {
-			if tool.Name() == toolCall.Function.Name {
-				selectedTool = tool
-				break
-			}
-		}
-
-		if selectedTool == nil {
-			result := fmt.Sprintf("Error: Tool '%s' not found", toolCall.Function.Name)
-			toolResults = append(toolResults, result)
-
-			// Add tool result message
-			updatedMessages = append(updatedMessages, llm.Message{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: toolCall.ID,
-			})
-			continue
-		}
-
-		// Parse tool parameters
-		var params map[string]interface{}
-		if toolCall.Function.Arguments != "" {
-			err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params)
-			if err != nil {
-				result := fmt.Sprintf("Error parsing tool parameters: %v", err)
-				toolResults = append(toolResults, result)
-
-				updatedMessages = append(updatedMessages, llm.Message{
-					Role:       "tool",
-					Content:    result,
-					ToolCallID: toolCall.ID,
-				})
-				continue
-			}
-		}
-
-		// Execute the tool
-		toolResult, err := selectedTool.Execute(ctx, params)
-		var result string
-		if err != nil {
-			result = fmt.Sprintf("Error executing tool: %v", err)
-		} else {
-			resultJSON, _ := json.Marshal(toolResult)
-			result = string(resultJSON)
-		}
-
-		toolResults = append(toolResults, result)
-
-		// Add tool result message
-		updatedMessages = append(updatedMessages, llm.Message{
-			Role:       "tool",
-			Content:    result,
-			ToolCallID: toolCall.ID,
-		})
-
-		// Add tool result to memory
-		if a.config.Memory != nil {
-			err := a.config.Memory.Add(ctx, RoleTool, fmt.Sprintf("Tool '%s' result: %s", selectedTool.Name(), result))
-			if err != nil {
-				return "", fmt.Errorf("failed to add tool result to memory: %w", err)
-			}
-		}
-	}
-
-	// Make another LLM call with tool results
-	req := llm.ChatRequest{
-		Messages:    updatedMessages,
-		Model:       a.config.Model,
-		Temperature: a.config.Temperature,
-		MaxTokens:   a.config.MaxTokens,
-	}
-
-	response, err := a.config.Provider.Chat(ctx, req)
-	if err != nil {
-		return "", fmt.Errorf("LLM call after tool execution failed: %w", err)
-	}
-
-	if len(response.Choices) == 0 {
-		return "", fmt.Errorf("no response choices returned after tool execution")
-	}
-
-	finalResponse := response.Choices[0].Message.Content
-
-	// Add final response to memory
-	if a.config.Memory != nil {
-		err := a.config.Memory.Add(ctx, RoleAssistant, finalResponse)
-		if err != nil {
-			return "", fmt.Errorf("failed to add final response to memory: %w", err)
-		}
-	}
-
-	return finalResponse, nil
 }

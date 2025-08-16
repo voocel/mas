@@ -1,12 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"os"
 
 	"github.com/voocel/mas"
-	"github.com/voocel/mas/memory"
-	"github.com/voocel/mas/tools"
 )
 
 func main() {
@@ -25,37 +23,33 @@ func main() {
 		WithSystemPrompt("You are a helpful assistant.").
 		WithTemperature(0.7).
 		WithMaxTokens(1000).
-		WithMemory(memory.Conversation(10))
+		WithMemory(mas.NewConversationMemory(10))
 
 	fmt.Printf("Configured Agent: %s\n", configuredAgent.Name())
 
-	// Test 3: Tools
+	// Test 3: Custom Tools
 	fmt.Println("\nTest 3: Tool Creation")
-	calc := tools.Calculator()
-	httpTool := tools.HTTPRequest()
-	webSearch := tools.WebSearch()
+	greetingTool := mas.NewSimpleTool("greeting", "Generate a greeting message", func(ctx context.Context, params map[string]any) (any, error) {
+		return "Hello, World!", nil
+	})
 
-	fmt.Printf("Calculator Tool: %s - %s\n", calc.Name(), calc.Description())
-	fmt.Printf("HTTP Tool: %s - %s\n", httpTool.Name(), httpTool.Description())
-	fmt.Printf("Web Search Tool: %s - %s\n", webSearch.Name(), webSearch.Description())
+	fmt.Printf("Greeting Tool: %s - %s\n", greetingTool.Name(), greetingTool.Description())
 
 	// Test 4: Agent with Tools
 	fmt.Println("\nTest 4: Agent with Tools")
 	toolAgent := mas.NewAgent("gpt-4.1", "test-key").
-		WithTools(calc, httpTool, webSearch).
-		WithMemory(memory.Conversation(5))
+		WithTools(greetingTool).
+		WithMemory(mas.NewConversationMemory(5))
 
 	fmt.Printf("Agent with tools created successfully: %s\n", toolAgent.Name())
 
 	// Test 5: Memory Systems
 	fmt.Println("\nTest 5: Memory Systems")
-	convMemory := memory.Conversation(10)
-	persistentMemory := memory.Persistent(100, "./test-memory.json")
-	sharedMemory := memory.ThreadSafe(memory.Conversation(20))
+	convMemory := mas.NewConversationMemory(10)
+	summaryMemory := mas.NewSummaryMemory(20)
 
 	fmt.Printf("Conversation Memory: %T\n", convMemory)
-	fmt.Printf("Persistent Memory: %T\n", persistentMemory)
-	fmt.Printf("Shared Memory: %T\n", sharedMemory)
+	fmt.Printf("Summary Memory: %T\n", summaryMemory)
 
 	// Test 6: Workflow
 	fmt.Println("\nTest 6: Workflow")
@@ -71,21 +65,4 @@ func main() {
 		SetStart("researcher")
 
 	fmt.Printf("Workflow created with nodes\n")
-
-	// Test 7: Tool Registry
-	fmt.Println("\nTest 7: Tool Registry")
-	registry := mas.NewToolRegistry()
-	registry.Register(calc)
-	registry.Register(httpTool)
-
-	fmt.Printf("Registry has %d tools: %v\n", len(registry.Names()), registry.Names())
-
-	fmt.Println("\nAll tests passed! MAS Framework is ready to use.")
-	fmt.Println("\nNext steps:")
-	fmt.Println("1. Set your OPENAI_API_KEY environment variable")
-	fmt.Println("2. Run examples: cd examples/basic && go run main.go")
-	fmt.Println("3. Check out the documentation in README.md")
-
-	// Clean up test file
-	os.Remove("./test-memory.json")
 }

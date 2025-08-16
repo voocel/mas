@@ -7,453 +7,107 @@ import (
 	"time"
 )
 
-// WorkflowContext represents the execution context for a workflow
-type WorkflowContext struct {
-	ID       string         `json:"id"`
-	Data     map[string]any `json:"data"`
-	Messages []Message      `json:"messages"`
-	mutex    sync.RWMutex
+type workflowBuilder struct {
+	nodes             map[string]WorkflowNode
+	edges             map[string][]string
+	startNode         string
+	conditionalRoutes map[string]*conditionalRoute
+	checkpointer      Checkpointer
+	mu                sync.RWMutex
 }
 
-// Get safely retrieves a value from context
-func (c *WorkflowContext) Get(key string) any {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
-	return c.Data[key]
+type conditionalRoute struct {
+	condition   func(*WorkflowContext) bool
+	trueTarget  string
+	falseTarget string
 }
 
-// Set safely sets a value in context
-func (c *WorkflowContext) Set(key string, value any) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	c.Data[key] = value
-}
-
-// AddMessage adds a message to the context
-func (c *WorkflowContext) AddMessage(role, content string) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	c.Messages = append(c.Messages, Message{
-		Role:      role,
-		Content:   content,
-		Timestamp: time.Now(),
-	})
-}
-
-// WorkflowNode represents a node in the workflow
-type WorkflowNode interface {
-	// ID returns the unique identifier of the node
-	ID() string
-
-	// Execute runs the node with given context
-	Execute(ctx context.Context, wfCtx *WorkflowContext) error
-}
-
-// WorkflowBuilder provides a fluent API for building workflows
-type WorkflowBuilder struct {
-	nodes     map[string]WorkflowNode
-	edges     map[string][]string
-	startNode string
-}
-
-// NewWorkflow creates a new workflow builder
-func NewWorkflow() *WorkflowBuilder {
-	return &WorkflowBuilder{
-		nodes: make(map[string]WorkflowNode),
-		edges: make(map[string][]string),
-	}
-}
-
-// AddNode adds a node to the workflow
-func (b *WorkflowBuilder) AddNode(node WorkflowNode) *WorkflowBuilder {
-	b.nodes[node.ID()] = node
-	return b
-}
-
-// AddEdge adds an edge between nodes
-func (b *WorkflowBuilder) AddEdge(from, to string) *WorkflowBuilder {
-	b.edges[from] = append(b.edges[from], to)
-	return b
-}
-
-// SetStart sets the starting node
-func (b *WorkflowBuilder) SetStart(nodeID string) *WorkflowBuilder {
-	b.startNode = nodeID
-	return b
-}
-
-// AddConditionalEdge adds a conditional edge with multiple conditions
-func (b *WorkflowBuilder) AddConditionalEdge(fromNodeID string, conditions ...Condition) *WorkflowBuilder {
-	// Create a conditional node
-	conditionalNodeID := fromNodeID + "_conditional"
-	conditionalNode := NewConditionalNode(conditionalNodeID)
-
-	for _, condition := range conditions {
-		conditionalNode.When(condition.Check, condition.Target)
-	}
-
-	// Add the conditional node and connect it
-	b.nodes[conditionalNodeID] = conditionalNode
-	b.edges[fromNodeID] = []string{conditionalNodeID}
-
-	return b
-}
-
-// When creates a condition for use with AddConditionalEdge
-func When(check func(*WorkflowContext) bool, target string) Condition {
-	return Condition{
-		Check:  check,
-		Target: target,
-	}
-}
-
-// AddConditionalRoute adds a simple conditional route (convenience method)
-func (b *WorkflowBuilder) AddConditionalRoute(fromNodeID string, condition func(*WorkflowContext) bool, trueTarget, falseTarget string) *WorkflowBuilder {
-	return b.AddConditionalEdge(fromNodeID,
-		When(condition, trueTarget),
-		When(func(*WorkflowContext) bool { return true }, falseTarget), // Default case
-	)
-}
-
-// Execute runs the workflow
-func (b *WorkflowBuilder) Execute(ctx context.Context, initialData map[string]any) (*WorkflowContext, error) {
-	wfCtx := &WorkflowContext{
-		ID:   generateWorkflowID(),
-		Data: initialData,
-	}
-	if wfCtx.Data == nil {
-		wfCtx.Data = make(map[string]any)
-	}
-
-	return b.executeFrom(ctx, b.startNode, wfCtx)
-}
-
-// executeFrom executes workflow starting from a specific node
-func (b *WorkflowBuilder) executeFrom(ctx context.Context, nodeID string, wfCtx *WorkflowContext) (*WorkflowContext, error) {
-	visited := make(map[string]bool)
-	queue := []string{nodeID}
-
-	for len(queue) > 0 {
-		currentNodeID := queue[0]
-		queue = queue[1:]
-
-		if visited[currentNodeID] {
-			continue // Avoid cycles
-		}
-		visited[currentNodeID] = true
-
-		select {
-		case <-ctx.Done():
-			return wfCtx, ctx.Err()
-		default:
-		}
-
-		// Get and execute node
-		node, exists := b.nodes[currentNodeID]
-		if !exists {
-			return wfCtx, fmt.Errorf("node %s not found", currentNodeID)
-		}
-
-		if err := node.Execute(ctx, wfCtx); err != nil {
-			return wfCtx, fmt.Errorf("node %s execution failed: %w", currentNodeID, err)
-		}
-
-		// Check if node specified next node (for conditional routing)
-		if nextNode := wfCtx.Get("next_node"); nextNode != nil {
-			if nextNodeStr, ok := nextNode.(string); ok && nextNodeStr != "" {
-				wfCtx.Set("next_node", nil) // Clear for next iteration
-				queue = append(queue, nextNodeStr)
-				continue
-			}
-		}
-
-		// Add next nodes to queue based on edges
-		if nextNodes, exists := b.edges[currentNodeID]; exists {
-			queue = append(queue, nextNodes...)
-		}
-	}
-
-	return wfCtx, nil
-}
-
-// AgentNode wraps an Agent as a workflow node
-type AgentNode struct {
+type agentNode struct {
 	id     string
 	agent  Agent
 	prompt string
 }
 
-// NewAgentNode creates a new agent workflow node
-func NewAgentNode(id string, agent Agent) *AgentNode {
-	return &AgentNode{
-		id:    id,
-		agent: agent,
-	}
-}
-
-// WithPrompt sets a custom prompt template
-func (n *AgentNode) WithPrompt(prompt string) *AgentNode {
-	n.prompt = prompt
-	return n
-}
-
-// ID returns the node ID
-func (n *AgentNode) ID() string {
-	return n.id
-}
-
-// Execute runs the agent
-func (n *AgentNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
-	input := wfCtx.Get("input")
-	if input == nil {
-		input = "Continue with the workflow"
-	}
-
-	prompt := fmt.Sprintf("%v", input)
-	if n.prompt != "" {
-		prompt = fmt.Sprintf(n.prompt, input)
-	}
-
-	// Execute agent
-	response, err := n.agent.Chat(ctx, prompt)
-	if err != nil {
-		return fmt.Errorf("agent execution failed: %w", err)
-	}
-
-	// Store response in context
-	wfCtx.Set("output", response)
-	wfCtx.Set("last_agent", n.id)
-	wfCtx.AddMessage("assistant", response)
-
-	return nil
-}
-
-// ToolNode wraps a Tool as a workflow node
-type ToolNode struct {
+type toolNode struct {
 	id     string
 	tool   Tool
 	params map[string]any
 }
 
-// NewToolNode creates a new tool workflow node
-func NewToolNode(id string, tool Tool) *ToolNode {
-	return &ToolNode{
-		id:     id,
-		tool:   tool,
-		params: make(map[string]any),
-	}
-}
-
-// WithParams sets tool parameters
-func (n *ToolNode) WithParams(params map[string]any) *ToolNode {
-	n.params = params
-	return n
-}
-
-// ID returns the node ID
-func (n *ToolNode) ID() string {
-	return n.id
-}
-
-// Execute runs the tool
-func (n *ToolNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
-	// Merge context data with node params
-	params := make(map[string]any)
-	for k, v := range n.params {
-		params[k] = v
-	}
-
-	// Allow context to override params
-	if ctxParams := wfCtx.Get("tool_params"); ctxParams != nil {
-		if ctxParamsMap, ok := ctxParams.(map[string]any); ok {
-			for k, v := range ctxParamsMap {
-				params[k] = v
-			}
-		}
-	}
-
-	// Execute tool
-	result, err := n.tool.Execute(ctx, params)
-	if err != nil {
-		return fmt.Errorf("tool execution failed: %w", err)
-	}
-
-	// Store result in context
-	wfCtx.Set("tool_result", result)
-	wfCtx.Set("last_tool", n.id)
-
-	return nil
-}
-
-// ParallelNode executes multiple nodes concurrently
-type ParallelNode struct {
+type parallelNode struct {
 	id    string
 	nodes []WorkflowNode
 }
 
-// NewParallelNode creates a new parallel workflow node
-func NewParallelNode(id string, nodes ...WorkflowNode) *ParallelNode {
-	return &ParallelNode{
-		id:    id,
-		nodes: nodes,
-	}
-}
-
-// ID returns the node ID
-func (n *ParallelNode) ID() string {
-	return n.id
-}
-
-// Execute runs all child nodes concurrently
-func (n *ParallelNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
-	if len(n.nodes) == 0 {
-		return nil
-	}
-
-	errChan := make(chan error, len(n.nodes))
-
-	// Execute all nodes concurrently
-	for _, node := range n.nodes {
-		go func(n WorkflowNode) {
-			errChan <- n.Execute(ctx, wfCtx)
-		}(node)
-	}
-
-	// Wait for all nodes to complete
-	for i := 0; i < len(n.nodes); i++ {
-		if err := <-errChan; err != nil {
-			return err // Return first error
-		}
-	}
-
-	return nil
-}
-
-// ConditionFunc represents a condition function for routing
-type ConditionFunc func(*WorkflowContext) string
-
-// ConditionalNode makes routing decisions based on context state
-type ConditionalNode struct {
+type conditionalNode struct {
 	id         string
 	conditions []Condition
 	defaultTo  string
 }
 
-// Condition represents a single condition with its target
-type Condition struct {
-	Check  func(*WorkflowContext) bool
-	Target string
-}
-
-// NewConditionalNode creates a new conditional routing node
-func NewConditionalNode(id string) *ConditionalNode {
-	return &ConditionalNode{
-		id:         id,
-		conditions: make([]Condition, 0),
-	}
-}
-
-// When adds a condition with its target node
-func (n *ConditionalNode) When(check func(*WorkflowContext) bool, target string) *ConditionalNode {
-	n.conditions = append(n.conditions, Condition{
-		Check:  check,
-		Target: target,
-	})
-	return n
-}
-
-// Otherwise sets the default target when no conditions match
-func (n *ConditionalNode) Otherwise(target string) *ConditionalNode {
-	n.defaultTo = target
-	return n
-}
-
-// ID returns the node ID
-func (n *ConditionalNode) ID() string {
-	return n.id
-}
-
-// Execute evaluates conditions and returns the target node
-func (n *ConditionalNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
-	// Find the first matching condition
-	for _, condition := range n.conditions {
-		if condition.Check(wfCtx) {
-			wfCtx.Set("next_node", condition.Target)
-			return nil
-		}
-	}
-
-	// Use default if no conditions match
-	if n.defaultTo != "" {
-		wfCtx.Set("next_node", n.defaultTo)
-		return nil
-	}
-
-	return fmt.Errorf("no matching condition and no default route in conditional node %s", n.id)
-}
-
-// HumanInput represents input from a human user
-type HumanInput struct {
-	Value string
-	Data  map[string]any
-}
-
-// HumanInputProvider handles human input collection
-type HumanInputProvider interface {
-	// RequestInput requests input from a human with a prompt
-	RequestInput(ctx context.Context, prompt string, options ...HumanInputOption) (*HumanInput, error)
-}
-
-// HumanInputOption configures human input behavior
-type HumanInputOption func(*HumanInputConfig)
-
-// HumanInputConfig contains configuration for human input
-type HumanInputConfig struct {
-	Timeout   time.Duration
-	Validator func(string) error
-	Required  bool
-}
-
-// WithTimeout sets the timeout for human input
-func WithTimeout(timeout time.Duration) HumanInputOption {
-	return func(config *HumanInputConfig) {
-		config.Timeout = timeout
-	}
-}
-
-// WithValidator sets a validation function for human input
-func WithValidator(validator func(string) error) HumanInputOption {
-	return func(config *HumanInputConfig) {
-		config.Validator = validator
-	}
-}
-
-// WithRequired sets whether input is required
-func WithRequired(required bool) HumanInputOption {
-	return func(config *HumanInputConfig) {
-		config.Required = required
-	}
-}
-
-// DefaultHumanInputConfig returns default configuration
-func DefaultHumanInputConfig() HumanInputConfig {
-	return HumanInputConfig{
-		Timeout:  5 * time.Minute,
-		Required: true,
-	}
-}
-
-// HumanNode represents a node that requires human input
-type HumanNode struct {
+type humanNode struct {
 	id       string
 	prompt   string
 	provider HumanInputProvider
 	options  []HumanInputOption
 }
 
-// NewHumanNode creates a new human input node
-func NewHumanNode(id, prompt string, provider HumanInputProvider) *HumanNode {
-	return &HumanNode{
+// NewWorkflow Create Workflow Builder
+func NewWorkflow() WorkflowBuilder {
+	return &workflowBuilder{
+		nodes:             make(map[string]WorkflowNode),
+		edges:             make(map[string][]string),
+		conditionalRoutes: make(map[string]*conditionalRoute),
+	}
+}
+
+// NewWorkflowContext Create Workflow Context
+func NewWorkflowContext(id string, initialData map[string]any) *WorkflowContext {
+	data := make(map[string]any)
+	if initialData != nil {
+		for k, v := range initialData {
+			data[k] = v
+		}
+	}
+
+	return &WorkflowContext{
+		ID:       id,
+		Data:     data,
+		Messages: make([]Message, 0),
+	}
+}
+
+func NewAgentNode(id string, agent Agent) WorkflowNode {
+	return &agentNode{
+		id:    id,
+		agent: agent,
+	}
+}
+
+func NewToolNode(id string, tool Tool) WorkflowNode {
+	return &toolNode{
+		id:     id,
+		tool:   tool,
+		params: make(map[string]any),
+	}
+}
+
+func NewParallelNode(id string, nodes ...WorkflowNode) WorkflowNode {
+	return &parallelNode{
+		id:    id,
+		nodes: nodes,
+	}
+}
+
+func NewConditionalNode(id string) WorkflowNode {
+	return &conditionalNode{
+		id:         id,
+		conditions: make([]Condition, 0),
+	}
+}
+
+func NewHumanNode(id, prompt string, provider HumanInputProvider) WorkflowNode {
+	return &humanNode{
 		id:       id,
 		prompt:   prompt,
 		provider: provider,
@@ -461,50 +115,19 @@ func NewHumanNode(id, prompt string, provider HumanInputProvider) *HumanNode {
 	}
 }
 
-// WithOptions adds configuration options
-func (n *HumanNode) WithOptions(options ...HumanInputOption) *HumanNode {
-	n.options = append(n.options, options...)
-	return n
+// Console input provider
+type consoleInputProvider struct{}
+
+func NewConsoleInputProvider() HumanInputProvider {
+	return &consoleInputProvider{}
 }
 
-// ID returns the node ID
-func (n *HumanNode) ID() string {
-	return n.id
-}
-
-// Execute requests human input and stores the result
-func (n *HumanNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
-	// Build prompt with context data
-	prompt := n.prompt
-	if contextData := wfCtx.Get("output"); contextData != nil {
-		prompt = fmt.Sprintf("%s\n\nContext: %v", prompt, contextData)
+func (p *consoleInputProvider) RequestInput(ctx context.Context, prompt string, options ...HumanInputOption) (*HumanInput, error) {
+	config := HumanInputConfig{
+		Timeout:  5 * time.Minute,
+		Required: true,
 	}
 
-	// Request human input
-	input, err := n.provider.RequestInput(ctx, prompt, n.options...)
-	if err != nil {
-		return fmt.Errorf("human input failed: %w", err)
-	}
-
-	// Store input in context
-	wfCtx.Set("human_input", input.Value)
-	wfCtx.Set("human_data", input.Data)
-	wfCtx.AddMessage("human", input.Value)
-
-	return nil
-}
-
-// ConsoleInputProvider provides human input via console
-type ConsoleInputProvider struct{}
-
-// NewConsoleInputProvider creates a new console input provider
-func NewConsoleInputProvider() *ConsoleInputProvider {
-	return &ConsoleInputProvider{}
-}
-
-// RequestInput requests input from console with timeout
-func (p *ConsoleInputProvider) RequestInput(ctx context.Context, prompt string, options ...HumanInputOption) (*HumanInput, error) {
-	config := DefaultHumanInputConfig()
 	for _, option := range options {
 		option(&config)
 	}
@@ -515,7 +138,6 @@ func (p *ConsoleInputProvider) RequestInput(ctx context.Context, prompt string, 
 	inputChan := make(chan *HumanInput, 1)
 	errChan := make(chan error, 1)
 
-	// Start input goroutine
 	go func() {
 		fmt.Printf("\nHuman Input Required:\n%s\n> ", prompt)
 
@@ -554,7 +176,348 @@ func (p *ConsoleInputProvider) RequestInput(ctx context.Context, prompt string, 
 	}
 }
 
-// generateWorkflowID generates a unique workflow ID
+// WorkflowBuilder implementation
+
+func (b *workflowBuilder) AddNode(node WorkflowNode) WorkflowBuilder {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nodes[node.ID()] = node
+	return b
+}
+
+func (b *workflowBuilder) AddEdge(from, to string) WorkflowBuilder {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.edges[from] = append(b.edges[from], to)
+	return b
+}
+
+func (b *workflowBuilder) SetStart(nodeID string) WorkflowBuilder {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.startNode = nodeID
+	return b
+}
+
+func (b *workflowBuilder) AddConditionalRoute(fromNodeID string, condition func(*WorkflowContext) bool, trueTarget, falseTarget string) WorkflowBuilder {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.conditionalRoutes[fromNodeID] = &conditionalRoute{
+		condition:   condition,
+		trueTarget:  trueTarget,
+		falseTarget: falseTarget,
+	}
+	return b
+}
+
+func (b *workflowBuilder) WithCheckpointer(checkpointer Checkpointer) WorkflowBuilder {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.checkpointer = checkpointer
+	return b
+}
+
+func (b *workflowBuilder) Execute(ctx context.Context, initialData map[string]any) (*WorkflowContext, error) {
+	wfCtx := NewWorkflowContext(generateWorkflowID(), initialData)
+	return b.executeFrom(ctx, b.startNode, wfCtx)
+}
+
+func (b *workflowBuilder) ExecuteWithCheckpoint(ctx context.Context, initialData map[string]any) (*WorkflowContext, error) {
+	if b.checkpointer == nil {
+		return nil, fmt.Errorf("no checkpointer configured")
+	}
+
+	wfCtx := NewWorkflowContext(generateWorkflowID(), initialData)
+
+	// Create initial checkpoint
+	checkpoint := CreateCheckpoint(
+		wfCtx.ID,
+		b.startNode,
+		[]string{},
+		wfCtx,
+		CheckpointTypeAuto,
+	)
+
+	if err := b.checkpointer.Save(ctx, checkpoint); err != nil {
+		return nil, fmt.Errorf("failed to save initial checkpoint: %w", err)
+	}
+
+	return b.executeFrom(ctx, b.startNode, wfCtx)
+}
+
+func (b *workflowBuilder) ResumeFromCheckpoint(ctx context.Context, workflowID string) (*WorkflowContext, error) {
+	if b.checkpointer == nil {
+		return nil, fmt.Errorf("no checkpointer configured")
+	}
+
+	checkpoint, err := b.checkpointer.Load(ctx, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load checkpoint: %w", err)
+	}
+
+	return b.executeFrom(ctx, checkpoint.CurrentNode, checkpoint.Context)
+}
+
+// Internal execution logic
+func (b *workflowBuilder) executeFrom(ctx context.Context, nodeID string, wfCtx *WorkflowContext) (*WorkflowContext, error) {
+	visited := make(map[string]bool)
+	queue := []string{nodeID}
+
+	for len(queue) > 0 {
+		currentNodeID := queue[0]
+		queue = queue[1:]
+
+		if visited[currentNodeID] {
+			continue
+		}
+		visited[currentNodeID] = true
+
+		select {
+		case <-ctx.Done():
+			return wfCtx, ctx.Err()
+		default:
+		}
+
+		node, exists := b.nodes[currentNodeID]
+		if !exists {
+			return wfCtx, fmt.Errorf("node %s not found", currentNodeID)
+		}
+
+		if err := node.Execute(ctx, wfCtx); err != nil {
+			return wfCtx, fmt.Errorf("node %s execution failed: %w", currentNodeID, err)
+		}
+
+		// Check for conditional routing
+		if route, hasRoute := b.conditionalRoutes[currentNodeID]; hasRoute {
+			if route.condition(wfCtx) {
+				queue = append(queue, route.trueTarget)
+			} else {
+				queue = append(queue, route.falseTarget)
+			}
+			continue
+		}
+
+		// Check if node specified next node
+		if nextNode := wfCtx.Get("next_node"); nextNode != nil {
+			if nextNodeStr, ok := nextNode.(string); ok && nextNodeStr != "" {
+				wfCtx.Set("next_node", nil)
+				queue = append(queue, nextNodeStr)
+				continue
+			}
+		}
+
+		// Add next nodes based on edges
+		if nextNodes, exists := b.edges[currentNodeID]; exists {
+			queue = append(queue, nextNodes...)
+		}
+	}
+
+	return wfCtx, nil
+}
+
+// WorkflowContext implementation
+
+func (c *WorkflowContext) Get(key string) any {
+	return c.Data[key]
+}
+
+func (c *WorkflowContext) Set(key string, value any) {
+	if c.Data == nil {
+		c.Data = make(map[string]any)
+	}
+	c.Data[key] = value
+}
+
+func (c *WorkflowContext) AddMessage(role, content string) {
+	c.Messages = append(c.Messages, Message{
+		Role:      role,
+		Content:   content,
+		Timestamp: time.Now(),
+		Metadata:  make(map[string]interface{}),
+	})
+}
+
+func (c *WorkflowContext) GetMessages() []Message {
+	messages := make([]Message, len(c.Messages))
+	copy(messages, c.Messages)
+	return messages
+}
+
+func (c *WorkflowContext) GetData() map[string]any {
+	data := make(map[string]any)
+	for k, v := range c.Data {
+		data[k] = v
+	}
+	return data
+}
+
+// Node implementations
+
+func (n *agentNode) ID() string {
+	return n.id
+}
+
+func (n *agentNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
+	input := wfCtx.Get("input")
+	if input == nil {
+		input = "Continue with the workflow"
+	}
+
+	prompt := fmt.Sprintf("%v", input)
+	if n.prompt != "" {
+		prompt = fmt.Sprintf(n.prompt, input)
+	}
+
+	response, err := n.agent.Chat(ctx, prompt)
+	if err != nil {
+		return fmt.Errorf("agent execution failed: %w", err)
+	}
+
+	wfCtx.Set("output", response)
+	wfCtx.Set("last_agent", n.id)
+	wfCtx.AddMessage(RoleAssistant, response)
+
+	return nil
+}
+
+func (n *agentNode) WithPrompt(prompt string) WorkflowNode {
+	newNode := *n
+	newNode.prompt = prompt
+	return &newNode
+}
+
+func (n *toolNode) ID() string {
+	return n.id
+}
+
+func (n *toolNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
+	params := make(map[string]any)
+	for k, v := range n.params {
+		params[k] = v
+	}
+
+	if ctxParams := wfCtx.Get("tool_params"); ctxParams != nil {
+		if ctxParamsMap, ok := ctxParams.(map[string]any); ok {
+			for k, v := range ctxParamsMap {
+				params[k] = v
+			}
+		}
+	}
+
+	result, err := n.tool.Execute(ctx, params)
+	if err != nil {
+		return fmt.Errorf("tool execution failed: %w", err)
+	}
+
+	wfCtx.Set("tool_result", result)
+	wfCtx.Set("last_tool", n.id)
+
+	return nil
+}
+
+func (n *toolNode) WithParams(params map[string]any) WorkflowNode {
+	newNode := *n
+	newNode.params = params
+	return &newNode
+}
+
+func (n *parallelNode) ID() string {
+	return n.id
+}
+
+func (n *parallelNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
+	if len(n.nodes) == 0 {
+		return nil
+	}
+
+	errChan := make(chan error, len(n.nodes))
+
+	for _, node := range n.nodes {
+		go func(n WorkflowNode) {
+			errChan <- n.Execute(ctx, wfCtx)
+		}(node)
+	}
+
+	for i := 0; i < len(n.nodes); i++ {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (n *conditionalNode) ID() string {
+	return n.id
+}
+
+func (n *conditionalNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
+	for _, condition := range n.conditions {
+		if condition.Check(wfCtx) {
+			wfCtx.Set("next_node", condition.Target)
+			return nil
+		}
+	}
+
+	if n.defaultTo != "" {
+		wfCtx.Set("next_node", n.defaultTo)
+		return nil
+	}
+
+	return fmt.Errorf("no matching condition and no default route in conditional node %s", n.id)
+}
+
+func (n *conditionalNode) When(check func(*WorkflowContext) bool, target string) WorkflowNode {
+	newNode := *n
+	newNode.conditions = append(newNode.conditions, Condition{
+		Check:  check,
+		Target: target,
+	})
+	return &newNode
+}
+
+func (n *conditionalNode) Otherwise(target string) WorkflowNode {
+	newNode := *n
+	newNode.defaultTo = target
+	return &newNode
+}
+
+func (n *humanNode) ID() string {
+	return n.id
+}
+
+func (n *humanNode) Execute(ctx context.Context, wfCtx *WorkflowContext) error {
+	prompt := n.prompt
+	if contextData := wfCtx.Get("output"); contextData != nil {
+		prompt = fmt.Sprintf("%s\n\nContext: %v", prompt, contextData)
+	}
+
+	input, err := n.provider.RequestInput(ctx, prompt, n.options...)
+	if err != nil {
+		return fmt.Errorf("human input failed: %w", err)
+	}
+
+	wfCtx.Set("human_input", input.Value)
+	wfCtx.Set("human_data", input.Data)
+	wfCtx.AddMessage("human", input.Value)
+
+	return nil
+}
+
+func (n *humanNode) WithOptions(options ...HumanInputOption) WorkflowNode {
+	newNode := *n
+	newNode.options = append(newNode.options, options...)
+	return &newNode
+}
+
+// Utility functions
 func generateWorkflowID() string {
 	return fmt.Sprintf("wf_%d", time.Now().UnixNano())
+}
+
+func When(check func(*WorkflowContext) bool, target string) Condition {
+	return Condition{
+		Check:  check,
+		Target: target,
+	}
 }

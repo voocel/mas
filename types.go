@@ -179,6 +179,13 @@ type Agent interface {
 	StartAutonomous(ctx context.Context, strategy AutonomousStrategy) error
 	StopAutonomous(ctx context.Context) error
 	IsAutonomous() bool
+
+	// Learning capability methods (optional)
+	WithLearningEngine(engine LearningEngine) Agent
+	GetLearningEngine() LearningEngine
+	RecordExperience(ctx context.Context, experience *Experience) error
+	SelfReflect(ctx context.Context) (*SelfReflection, error)
+	GetLearningMetrics() *LearningMetrics
 }
 
 // Memory represents the memory system for agents

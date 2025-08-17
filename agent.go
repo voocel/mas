@@ -28,6 +28,12 @@ type agent struct {
 	cognitiveState *CognitiveState
 	cognitiveMode  CognitiveMode
 
+	// Autonomous capability
+	goalManager GoalManager
+
+	// Learning capability
+	learningEngine LearningEngine
+
 	mu sync.RWMutex
 }
 
@@ -859,4 +865,157 @@ func extractConfidence(response string) float64 {
 		return 0.4
 	}
 	return 0.6 // default
+}
+
+// Autonomous capabilities implementation
+
+func (a *agent) WithGoalManager(manager GoalManager) Agent {
+	return &agent{
+		name:           a.name,
+		model:          a.model,
+		systemPrompt:   a.systemPrompt,
+		temperature:    a.temperature,
+		maxTokens:      a.maxTokens,
+		tools:          a.tools,
+		memory:         a.memory,
+		state:          a.state,
+		provider:       a.provider,
+		eventBus:       a.eventBus,
+		skillLibrary:   a.skillLibrary,
+		cognitiveState: a.cognitiveState,
+		cognitiveMode:  a.cognitiveMode,
+		goalManager:    manager,
+	}
+}
+
+func (a *agent) GetGoalManager() GoalManager {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.goalManager
+}
+
+func (a *agent) AddGoal(ctx context.Context, goal *Goal) error {
+	if a.goalManager == nil {
+		return fmt.Errorf("goal manager not configured - use WithGoalManager() first")
+	}
+	return a.goalManager.AddGoal(ctx, goal)
+}
+
+func (a *agent) StartAutonomous(ctx context.Context, strategy AutonomousStrategy) error {
+	if a.goalManager == nil {
+		return fmt.Errorf("goal manager not configured - use WithGoalManager() first")
+	}
+
+	// Emit autonomous start event
+	if err := a.PublishEvent(ctx, EventType("agent.autonomous.start"), EventData(
+		"agent_name", a.name,
+		"strategy", strategy,
+	)); err != nil {
+		fmt.Printf("Failed to publish autonomous start event: %v\n", err)
+	}
+
+	return a.goalManager.StartAutonomousMode(ctx, strategy)
+}
+
+func (a *agent) StopAutonomous(ctx context.Context) error {
+	if a.goalManager == nil {
+		return fmt.Errorf("goal manager not configured")
+	}
+
+	err := a.goalManager.StopAutonomousMode(ctx)
+
+	// Emit autonomous stop event
+	if publishErr := a.PublishEvent(ctx, EventType("agent.autonomous.stop"), EventData(
+		"agent_name", a.name,
+	)); publishErr != nil {
+		fmt.Printf("Failed to publish autonomous stop event: %v\n", publishErr)
+	}
+
+	return err
+}
+
+func (a *agent) IsAutonomous() bool {
+	if a.goalManager == nil {
+		return false
+	}
+	return a.goalManager.IsAutonomous()
+}
+
+// Learning capabilities implementation
+
+func (a *agent) WithLearningEngine(engine LearningEngine) Agent {
+	return &agent{
+		name:           a.name,
+		model:          a.model,
+		systemPrompt:   a.systemPrompt,
+		temperature:    a.temperature,
+		maxTokens:      a.maxTokens,
+		tools:          a.tools,
+		memory:         a.memory,
+		state:          a.state,
+		provider:       a.provider,
+		eventBus:       a.eventBus,
+		skillLibrary:   a.skillLibrary,
+		cognitiveState: a.cognitiveState,
+		cognitiveMode:  a.cognitiveMode,
+		goalManager:    a.goalManager,
+		learningEngine: engine,
+	}
+}
+
+func (a *agent) GetLearningEngine() LearningEngine {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.learningEngine
+}
+
+func (a *agent) RecordExperience(ctx context.Context, experience *Experience) error {
+	if a.learningEngine == nil {
+		return fmt.Errorf("learning engine not configured - use WithLearningEngine() first")
+	}
+	return a.learningEngine.RecordExperience(ctx, experience)
+}
+
+func (a *agent) SelfReflect(ctx context.Context) (*SelfReflection, error) {
+	if a.learningEngine == nil {
+		return nil, fmt.Errorf("learning engine not configured - use WithLearningEngine() first")
+	}
+
+	// Emit self-reflection start event
+	if err := a.PublishEvent(ctx, EventType("agent.self_reflection.start"), EventData(
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish self-reflection start event: %v\n", err)
+	}
+
+	reflection, err := a.learningEngine.SelfReflect(ctx)
+
+	// Emit self-reflection completion event
+	eventType := EventType("agent.self_reflection.complete")
+	eventData := EventData(
+		"agent_name", a.name,
+		"success", err == nil,
+	)
+
+	if err != nil {
+		eventType = EventType("agent.self_reflection.error")
+		eventData["error"] = err.Error()
+	} else {
+		eventData["learning_progress"] = reflection.LearningProgress
+		eventData["self_confidence"] = reflection.SelfConfidence
+		eventData["adaptation_needed"] = reflection.AdaptationNeeded
+	}
+
+	if publishErr := a.PublishEvent(ctx, eventType, eventData); publishErr != nil {
+		fmt.Printf("Failed to publish self-reflection event: %v\n", publishErr)
+	}
+
+	return reflection, err
+}
+
+func (a *agent) GetLearningMetrics() *LearningMetrics {
+	if a.learningEngine == nil {
+		return &LearningMetrics{} // Return empty metrics if no learning engine
+	}
+	return a.learningEngine.GetLearningMetrics()
 }

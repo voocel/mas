@@ -171,6 +171,14 @@ type Agent interface {
 	WithSkills(skills ...Skill) Agent
 	GetCognitiveState() *CognitiveState
 	SetCognitiveMode(mode CognitiveMode) Agent
+
+	// Autonomous capability methods (optional)
+	WithGoalManager(manager GoalManager) Agent
+	GetGoalManager() GoalManager
+	AddGoal(ctx context.Context, goal *Goal) error
+	StartAutonomous(ctx context.Context, strategy AutonomousStrategy) error
+	StopAutonomous(ctx context.Context) error
+	IsAutonomous() bool
 }
 
 // Memory represents the memory system for agents

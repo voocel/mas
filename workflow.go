@@ -13,7 +13,7 @@ type workflowBuilder struct {
 	startNode         string
 	conditionalRoutes map[string]*conditionalRoute
 	checkpointer      Checkpointer
-	eventBus          EventBus // 可选的事件总线
+	eventBus          EventBus
 	mu                sync.RWMutex
 }
 

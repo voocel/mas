@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/voocel/mas/llm"
 )
@@ -20,7 +22,13 @@ type agent struct {
 	state        map[string]interface{}
 	provider     llm.Provider
 	eventBus     EventBus
-	mu           sync.RWMutex
+
+	// Cognitive ability
+	skillLibrary   SkillLibrary
+	cognitiveState *CognitiveState
+	cognitiveMode  CognitiveMode
+
+	mu sync.RWMutex
 }
 
 func NewAgent(model, apiKey string) Agent {
@@ -30,13 +38,22 @@ func NewAgent(model, apiKey string) Agent {
 	}
 
 	return &agent{
-		name:        "assistant",
-		model:       model,
-		temperature: 0.7,
-		maxTokens:   2000,
-		tools:       make([]Tool, 0),
-		state:       make(map[string]interface{}),
-		provider:    provider,
+		name:         "assistant",
+		model:        model,
+		temperature:  0.7,
+		maxTokens:    2000,
+		tools:        make([]Tool, 0),
+		state:        make(map[string]interface{}),
+		provider:     provider,
+		skillLibrary: NewSkillLibrary(),
+		cognitiveState: &CognitiveState{
+			CurrentLayer:    CortexLayer,
+			Mode:            AutomaticMode,
+			LoadedSkills:    make([]string, 0),
+			RecentDecisions: make([]*Decision, 0),
+			LastUpdate:      time.Now(),
+		},
+		cognitiveMode: AutomaticMode,
 	}
 }
 
@@ -524,4 +541,322 @@ func (a *agent) convertToolsToLLMFormat() []llm.ToolDefinition {
 	}
 
 	return tools
+}
+
+// Cognitive capabilities implementation
+
+func (a *agent) Plan(ctx context.Context, goal string) (*Plan, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Emit planning event
+	if err := a.PublishEvent(ctx, EventType("agent.plan.start"), EventData(
+		"goal", goal,
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish plan start event: %v\n", err)
+	}
+
+	// Use LLM to generate plan
+	planPrompt := fmt.Sprintf(`Create a step-by-step plan to achieve this goal: %s
+
+Please respond with a structured plan including:
+1. Break down into logical steps
+2. Identify which cognitive layer each step should use:
+   - reflex: immediate responses
+   - cerebellum: learned skills
+   - cortex: reasoning and analysis
+   - meta: high-level planning
+
+Goal: %s`, goal, goal)
+
+	response, err := a.Chat(ctx, planPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate plan: %w", err)
+	}
+
+	plan := NewPlan(goal)
+	plan.Context["llm_response"] = response
+
+	// Update cognitive state
+	a.cognitiveState.ActivePlan = plan
+	a.cognitiveState.CurrentLayer = MetaLayer
+	a.cognitiveState.LastUpdate = time.Now()
+
+	// Emit planning completion event
+	if err := a.PublishEvent(ctx, EventType("agent.plan.complete"), EventData(
+		"plan_id", plan.ID,
+		"goal", goal,
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish plan complete event: %v\n", err)
+	}
+
+	return plan, nil
+}
+
+func (a *agent) Reason(ctx context.Context, situation *Situation) (*Decision, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Emit reasoning event
+	if err := a.PublishEvent(ctx, EventType("agent.reason.start"), EventData(
+		"situation", situation,
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish reason start event: %v\n", err)
+	}
+
+	// Create reasoning prompt
+	reasoningPrompt := fmt.Sprintf(`Analyze this situation and make a decision:
+
+Context: %v
+Inputs: %v
+Constraints: %v
+Goals: %v
+
+Please provide:
+1. Your analysis of the situation
+2. Recommended action
+3. Confidence level (0-1)
+4. Which cognitive layer to use for execution`,
+		situation.Context, situation.Inputs, situation.Constraints, situation.Goals)
+
+	response, err := a.Chat(ctx, reasoningPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reason about situation: %w", err)
+	}
+
+	// Create decision
+	decision := &Decision{
+		Action:     extractAction(response),
+		Layer:      CortexLayer,
+		Confidence: extractConfidence(response),
+		Reasoning:  response,
+		Parameters: make(map[string]interface{}),
+		Timestamp:  time.Now(),
+	}
+
+	// Update cognitive state
+	a.cognitiveState.RecentDecisions = append(a.cognitiveState.RecentDecisions, decision)
+	if len(a.cognitiveState.RecentDecisions) > 10 {
+		a.cognitiveState.RecentDecisions = a.cognitiveState.RecentDecisions[1:]
+	}
+	a.cognitiveState.CurrentLayer = CortexLayer
+	a.cognitiveState.LastUpdate = time.Now()
+
+	// Emit reasoning completion event
+	if err := a.PublishEvent(ctx, EventType("agent.reason.complete"), EventData(
+		"decision", decision,
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish reason complete event: %v\n", err)
+	}
+
+	return decision, nil
+}
+
+func (a *agent) ExecuteSkill(ctx context.Context, skillName string, params map[string]interface{}) (interface{}, error) {
+	a.mu.RLock()
+	skill, err := a.skillLibrary.GetSkill(skillName)
+	a.mu.RUnlock()
+
+	if err != nil {
+		return nil, fmt.Errorf("skill not found: %w", err)
+	}
+
+	// Emit skill execution event
+	if err := a.PublishEvent(ctx, EventType("agent.skill.start"), EventData(
+		"skill_name", skillName,
+		"parameters", params,
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish skill start event: %v\n", err)
+	}
+
+	// Execute skill
+	result, err := skill.Execute(ctx, params)
+
+	// Update cognitive state
+	a.mu.Lock()
+	a.cognitiveState.CurrentLayer = skill.Layer()
+	a.cognitiveState.LastUpdate = time.Now()
+	a.mu.Unlock()
+
+	// Emit skill completion event
+	eventType := EventType("agent.skill.complete")
+	eventData := EventData(
+		"skill_name", skillName,
+		"parameters", params,
+		"agent_name", a.name,
+		"success", err == nil,
+	)
+
+	if err != nil {
+		eventType = EventType("agent.skill.error")
+		eventData["error"] = err.Error()
+	} else {
+		eventData["result"] = result
+	}
+
+	if publishErr := a.PublishEvent(ctx, eventType, eventData); publishErr != nil {
+		fmt.Printf("Failed to publish skill event: %v\n", publishErr)
+	}
+
+	return result, err
+}
+
+func (a *agent) React(ctx context.Context, stimulus *Stimulus) (*Action, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Emit reaction event
+	if err := a.PublishEvent(ctx, EventType("agent.react.start"), EventData(
+		"stimulus", stimulus,
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish react start event: %v\n", err)
+	}
+
+	// Quick reactive response based on stimulus urgency
+	var action *Action
+
+	if stimulus.Urgency > 0.8 {
+		// High urgency - immediate reflex response
+		action = &Action{
+			Type:       "immediate_response",
+			Layer:      ReflexLayer,
+			Parameters: stimulus.Data,
+			Priority:   int(stimulus.Urgency * 100),
+			Timestamp:  time.Now(),
+		}
+	} else {
+		// Lower urgency - deliberate response
+		action = &Action{
+			Type:       "deliberate_response",
+			Layer:      CortexLayer,
+			Parameters: stimulus.Data,
+			Priority:   int(stimulus.Urgency * 100),
+			Timestamp:  time.Now(),
+		}
+	}
+
+	// Update cognitive state
+	a.cognitiveState.CurrentLayer = action.Layer
+	a.cognitiveState.LastUpdate = time.Now()
+
+	// Emit reaction completion event
+	if err := a.PublishEvent(ctx, EventType("agent.react.complete"), EventData(
+		"action", action,
+		"agent_name", a.name,
+	)); err != nil {
+		fmt.Printf("Failed to publish react complete event: %v\n", err)
+	}
+
+	return action, nil
+}
+
+func (a *agent) GetSkillLibrary() SkillLibrary {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.skillLibrary
+}
+
+func (a *agent) WithSkills(skills ...Skill) Agent {
+	newAgent := &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: a.systemPrompt,
+		temperature:  a.temperature,
+		maxTokens:    a.maxTokens,
+		tools:        a.tools,
+		memory:       a.memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     a.eventBus,
+		skillLibrary: NewSkillLibrary(),
+		cognitiveState: &CognitiveState{
+			CurrentLayer:    a.cognitiveState.CurrentLayer,
+			Mode:            a.cognitiveState.Mode,
+			ActivePlan:      a.cognitiveState.ActivePlan,
+			LoadedSkills:    make([]string, 0),
+			RecentDecisions: make([]*Decision, 0),
+			LastUpdate:      time.Now(),
+		},
+		cognitiveMode: a.cognitiveMode,
+	}
+
+	// Copy existing skills
+	for _, skill := range a.skillLibrary.ListSkills() {
+		newAgent.skillLibrary.RegisterSkill(skill)
+	}
+
+	// Add new skills
+	for _, skill := range skills {
+		newAgent.skillLibrary.RegisterSkill(skill)
+		newAgent.cognitiveState.LoadedSkills = append(newAgent.cognitiveState.LoadedSkills, skill.Name())
+	}
+
+	return newAgent
+}
+
+func (a *agent) GetCognitiveState() *CognitiveState {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// Return a copy to prevent external modification
+	state := *a.cognitiveState
+	return &state
+}
+
+func (a *agent) SetCognitiveMode(mode CognitiveMode) Agent {
+	newAgent := &agent{
+		name:         a.name,
+		model:        a.model,
+		systemPrompt: a.systemPrompt,
+		temperature:  a.temperature,
+		maxTokens:    a.maxTokens,
+		tools:        a.tools,
+		memory:       a.memory,
+		state:        a.state,
+		provider:     a.provider,
+		eventBus:     a.eventBus,
+		skillLibrary: a.skillLibrary,
+		cognitiveState: &CognitiveState{
+			CurrentLayer:    a.cognitiveState.CurrentLayer,
+			Mode:            mode,
+			ActivePlan:      a.cognitiveState.ActivePlan,
+			LoadedSkills:    a.cognitiveState.LoadedSkills,
+			RecentDecisions: a.cognitiveState.RecentDecisions,
+			LastUpdate:      time.Now(),
+		},
+		cognitiveMode: mode,
+	}
+
+	return newAgent
+}
+
+// Helper functions for cognitive processing
+
+func extractAction(response string) string {
+	// Simple extraction logic - in production you might use more sophisticated parsing
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		if strings.Contains(strings.ToLower(line), "action") || strings.Contains(strings.ToLower(line), "recommend") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return "continue"
+}
+
+func extractConfidence(response string) float64 {
+	// Simple confidence extraction - in production you might use regex or LLM structured output
+	if strings.Contains(strings.ToLower(response), "high confidence") || strings.Contains(strings.ToLower(response), "very confident") {
+		return 0.9
+	} else if strings.Contains(strings.ToLower(response), "medium confidence") || strings.Contains(strings.ToLower(response), "somewhat confident") {
+		return 0.7
+	} else if strings.Contains(strings.ToLower(response), "low confidence") || strings.Contains(strings.ToLower(response), "uncertain") {
+		return 0.4
+	}
+	return 0.6 // default
 }

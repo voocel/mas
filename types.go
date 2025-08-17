@@ -157,9 +157,20 @@ type Agent interface {
 	Name() string
 	Model() string
 
+	// Event-related Methods
 	GetEventBus() EventBus
 	StreamEvents(ctx context.Context, eventTypes ...EventType) (<-chan Event, error)
 	PublishEvent(ctx context.Context, eventType EventType, data map[string]interface{}) error
+
+	// Cognitive Ability Approach (Optional)
+	Plan(ctx context.Context, goal string) (*Plan, error)
+	Reason(ctx context.Context, situation *Situation) (*Decision, error)
+	ExecuteSkill(ctx context.Context, skillName string, params map[string]interface{}) (interface{}, error)
+	React(ctx context.Context, stimulus *Stimulus) (*Action, error)
+	GetSkillLibrary() SkillLibrary
+	WithSkills(skills ...Skill) Agent
+	GetCognitiveState() *CognitiveState
+	SetCognitiveMode(mode CognitiveMode) Agent
 }
 
 // Memory represents the memory system for agents

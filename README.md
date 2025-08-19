@@ -24,6 +24,35 @@ MAS (Multi-Agent System) is a lightweight, elegant multi-agent framework for Go,
 - **Tool System**: Extensible tool framework with sandbox security
 - **Memory Management**: Conversation and summary memory implementations
 - **LLM Integration**: Built on [litellm](https://github.com/voocel/litellm) for multiple providers
+- **Hierarchical Cognitive Architecture**: Brain-Cerebellum inspired layered intelligence
+  - **Four-Layer Processing**: Reflex → Cerebellum → Cortex → Meta cognitive layers
+  - **Automatic Layer Selection**: Intelligent selection of optimal processing layer
+  - **Skill Library System**: Pluggable cognitive capabilities and learned behaviors
+  - **Cognitive State Monitoring**: Real-time cognitive state tracking and introspection
+  - **Adaptive Processing**: Dynamic switching between reactive and deliberative modes
+- **Autonomous Goal Management**: Self-directed task execution with intelligent strategies
+  - **Goal Decomposition**: Automatic breakdown of complex goals into actionable steps
+  - **Multiple Strategies**: Sequential, parallel, priority-based, and adaptive execution
+  - **Progress Monitoring**: Real-time tracking of goal achievement and strategy adjustment
+  - **Learning Integration**: Performance insights and continuous improvement
+- **Learning & Adaptation**: Continuous improvement through experience and self-reflection
+  - **Experience Recording**: Detailed logging of all interactions and outcomes
+  - **Pattern Recognition**: Identification of successful and failed behavior patterns
+  - **Self-Reflection**: Agent's ability to analyze and improve its own behavior
+  - **Performance Prediction**: Predicting success probability of actions based on history
+  - **Strategy Optimization**: Dynamic adjustment of decision strategies based on learning
+- **Dynamic Collaboration Topology**: Intelligent multi-agent network organization
+  - **Seven Topology Types**: Star, Chain, Mesh, Hierarchy, Hub, Ring, and Adaptive patterns
+  - **Six Collaboration Modes**: Competitive, Cooperative, Delegation, Consensus, Specialization, and Swarm
+  - **Intelligent Task Distribution**: Capability and load-based optimal task assignment
+  - **Real-time Performance Analysis**: Comprehensive network metrics and bottleneck prediction
+  - **Automatic Optimization**: Dynamic topology restructuring based on performance criteria
+  - **Load Balancing**: Smart redistribution to prevent bottlenecks and optimize efficiency
+- **Event System**: Real-time observability and monitoring
+  - **Real-time Events**: Live execution tracking and progress updates
+  - **Performance Monitoring**: Built-in metrics and performance analysis
+  - **Error Tracking**: Detailed error context and debugging information
+  - **Enterprise Integration**: Easy integration with monitoring systems
 - **Checkpoint & Recovery**: Advanced workflow persistence and recovery system
   - **Automatic Checkpointing**: Saves state at key points
   - **Smart Recovery**: Resumes from interruption point
@@ -41,6 +70,11 @@ mas/
 ├── workflow.go         # Workflow orchestration and state management  
 ├── tool.go             # Tool framework and interface
 ├── memory.go           # Memory systems (conversation, summary)
+├── event.go            # Event system for real-time observability
+├── cognitive.go        # Hierarchical cognitive architecture (Brain-Cerebellum)
+├── autonomous.go       # Autonomous goal management and execution strategies
+├── learning.go         # Learning and adaptation mechanisms
+├── topology.go         # Dynamic collaboration topology management
 ├── checkpoint.go       # Checkpoint interfaces and utilities
 ├── types.go            # Core type definitions and interfaces
 ├── errors.go           # Error types and handling
@@ -71,10 +105,17 @@ mas/
 │   ├── redis.go        # Redis storage (+build redis)
 │   └── sqlite.go       # SQLite storage (+build sqlite)
 ├── tools/              # Built-in tool ecosystem
+├── skills/             # Cognitive skill implementations
+│   └── basic.go        # Math, text analysis, planning skills  
 ├── examples/           # Usage examples
 │   ├── basic/          # Basic agent usage
 │   ├── workflow/       # Multi-agent workflows
 │   ├── tools/          # Custom tools and multiple tools
+│   ├── cognitive/      # Hierarchical cognitive architecture
+│   ├── autonomous/     # Autonomous goal management
+│   ├── learning/       # Learning and adaptation
+│   ├── topology/       # Dynamic collaboration topology
+│   ├── events/         # Event system and real-time monitoring
 │   ├── baseurl/        # Custom API endpoints
 │   ├── checkpoint/     # Checkpoint and recovery
 │   └── verify/         # Installation verification
@@ -136,6 +177,124 @@ func main() {
 }
 ```
 
+### With Advanced Agent Capabilities (Optional)
+
+```go
+import "github.com/voocel/mas/skills"
+
+func main() {
+    // Create advanced agent with full AI capabilities
+    agent := mas.NewAgent("gpt-4.1", os.Getenv("OPENAI_API_KEY")).
+        WithSystemPrompt("You are an intelligent assistant.").
+        WithSkills(
+            skills.MathSkill(),         // Cerebellum layer: automatic math
+            skills.TextAnalysisSkill(), // Cortex layer: complex analysis
+            skills.QuickResponseSkill(), // Reflex layer: immediate responses
+            skills.PlanningSkill(),     // Meta layer: high-level planning
+        ).
+        SetCognitiveMode(mas.AutomaticMode).     // Auto-select optimal layer
+        WithGoalManager(mas.NewGoalManager()).   // Enable autonomous goals
+        WithLearningEngine(mas.NewLearningEngine()) // Enable learning
+    
+    // Autonomous goal execution
+    goal := mas.NewGoal("research_project", "Research AI trends and create report", mas.HighPriority)
+    agent.AddGoal(context.Background(), goal)
+    agent.StartAutonomous(context.Background()) // Runs autonomously
+    
+    // Cognitive skill execution (Cerebellum layer)
+    result, _ := agent.ExecuteSkill(context.Background(), "math_calculation", 
+        map[string]interface{}{"expression": "25 * 4 + 10"})
+    fmt.Printf("Math result: %v\n", result)
+    
+    // Learning from experience
+    agent.RecordExperience(context.Background(), mas.NewExperience(
+        mas.TaskExecution, "completed math task", true, 0.95, nil))
+    
+    // Self-reflection for improvement
+    reflection, _ := agent.SelfReflect(context.Background(), 
+        "How can I improve my math calculation performance?")
+    fmt.Printf("Self-reflection: %s\n", reflection.Insights)
+    
+    // Monitor learning metrics
+    metrics := agent.GetLearningMetrics()
+    fmt.Printf("Learning Rate: %.2f, Adaptation Rate: %.2f\n", 
+        metrics.LearningRate, metrics.AdaptationRate)
+}
+```
+
+### With Dynamic Collaboration Topology (Optional)
+
+```go
+func main() {
+    // Create dynamic topology for multi-agent collaboration
+    topology := mas.NewDynamicTopology(mas.AdaptiveTopology, mas.SwarmMode)
+    
+    // Create specialized agents
+    coordinator := mas.NewAgent("gpt-4", apiKey).
+        WithSystemPrompt("You are a project coordinator.")
+    specialist := mas.NewAgent("gpt-4", apiKey).
+        WithSystemPrompt("You are a domain specialist.")
+    worker := mas.NewAgent("gpt-4", apiKey).
+        WithSystemPrompt("You are a task executor.")
+    
+    // Add agents as topology nodes with roles and capabilities
+    topology.AddNode(mas.NewTopologyNode(coordinator, mas.CoordinatorRole, 
+        []string{"planning", "coordination"}))
+    topology.AddNode(mas.NewTopologyNode(specialist, mas.SpecialistRole, 
+        []string{"analysis", "research"}))
+    topology.AddNode(mas.NewTopologyNode(worker, mas.WorkerRole, 
+        []string{"execution", "processing"}))
+    
+    // Intelligent task distribution
+    task := mas.NewCollaborationTask("data_analysis", 3, 
+        []string{"analysis", "coordination"})
+    assignment, _ := topology.DistributeTask(context.Background(), task)
+    fmt.Printf("Task assigned to: %v (Coordinator: %s)\n", 
+        assignment.AssignedTo, assignment.Coordinator)
+    
+    // Adaptive topology optimization
+    workload := &mas.WorkloadPattern{
+        TaskTypes:        []string{"analysis", "processing"},
+        IntensityProfile: map[string]float64{"analysis": 0.9},
+        TimePattern:      "peak",
+    }
+    topology.AdaptToWorkload(context.Background(), workload)
+    
+    // Performance analysis
+    analysis, _ := topology.AnalyzePerformance(context.Background())
+    fmt.Printf("Network Efficiency: %.2f, Recommended Topology: %s\n", 
+        analysis.EfficiencyScore, analysis.OptimalTopology)
+}
+```
+
+### With Event System (Optional)
+
+```go
+func main() {
+    // Create event bus for observability
+    eventBus := mas.NewEventBus()
+    
+    agent := mas.NewAgent("gpt-4.1", os.Getenv("OPENAI_API_KEY")).
+        WithSystemPrompt("You are a helpful assistant.").
+        WithEventBus(eventBus)  // Enable real-time events
+    
+    // Subscribe to events for monitoring
+    eventBus.Subscribe(mas.EventAgentChatStart, func(ctx context.Context, event mas.Event) error {
+        fmt.Printf("Chat started: %s\n", event.Data["message"])
+        return nil
+    })
+    
+    eventBus.Subscribe(mas.EventToolStart, func(ctx context.Context, event mas.Event) error {
+        fmt.Printf("Tool executing: %s\n", event.Data["tool_name"])
+        return nil
+    })
+    
+    // Same API, enhanced with real-time observability
+    response, _ := agent.Chat(context.Background(), "Hello!")
+    fmt.Println(response)
+}
+```
+
 ### Custom Base URL (DeepSeek, Ollama, Azure OpenAI, etc.)
 
 ```go
@@ -175,6 +334,21 @@ cd examples/workflow && go run main.go
 
 # Custom tools and multiple tools
 cd examples/tools && go run main.go
+
+# Event system and real-time monitoring
+cd examples/events && go run main.go
+
+# Hierarchical cognitive architecture
+cd examples/cognitive && go run main.go
+
+# Autonomous goal management
+cd examples/autonomous && go run main.go
+
+# Learning and adaptation
+cd examples/learning && go run main.go
+
+# Dynamic collaboration topology
+cd examples/topology && go run main.go
 
 # Custom base URL configuration
 cd examples/baseurl && go run main.go
@@ -256,6 +430,10 @@ The [`examples/`](examples/) directory contains comprehensive examples:
 - **[Basic Usage](examples/basic/)** - Simple agent interactions and configuration
 - **[Tools Usage](examples/tools/)** - Built-in and custom tools with sandbox
 - **[Workflow Orchestration](examples/workflow/)** - Multi-agent workflows and coordination
+- **[Cognitive Architecture](examples/cognitive/)** - Hierarchical cognitive layers and skills
+- **[Autonomous Agents](examples/autonomous/)** - Goal-driven autonomous behavior
+- **[Learning Systems](examples/learning/)** - Self-improving agents with experience learning
+- **[Dynamic Topology](examples/topology/)** - Intelligent multi-agent collaboration networks
 
 Run examples:
 
@@ -456,3 +634,39 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details.
 
 - [litellm](https://github.com/voocel/litellm) - Unified LLM client library
 - [OpenAI Go](https://github.com/sashabaranov/go-openai) - OpenAI API client
+
+├── context/                        # 上下文工程核心模块 🎯
+│   ├── engine/                     # 上下文引擎
+│   │   ├── engine.go              # ContextEngine接口和实现
+│   │   ├── state.go               # ContextState管理
+│   │   └── checkpoint.go          # 检查点管理
+│   │
+│   ├── strategy/                   # 四大策略实现
+│   │   ├── strategy.go            # 策略接口定义
+│   │   ├── write.go               # Write策略：Scratchpad、Memory
+│   │   ├── select.go              # Select策略：相关信息选择
+│   │   ├── compress.go            # Compress策略：压缩和摘要
+│   │   ├── isolate.go             # Isolate策略：上下文隔离
+│   │   └── adaptive.go            # 自适应策略组合
+│   │
+│   ├── memory/                     # 记忆管理
+│   │   ├── memory.go              # Memory接口（保持现有）
+│   │   ├── episodic.go            # 情景记忆
+│   │   ├── semantic.go            # 语义记忆
+│   │   ├── procedural.go          # 程序记忆
+│   │   └── vector_store.go        # 向量存储
+│   │
+│   ├── shared/                     # 共享上下文
+│   │   ├── shared_context.go      # SharedContext接口
+│   │   ├── coordinator.go         # 多Agent协调器
+│   │   └── communication.go       # Agent间通信
+│   │
+│   └── types.go                   # 上下文相关类型定义
+│
+├── workflow/                       # 工作流模块
+│   ├── workflow.go                # 现有工作流（保持兼容）
+│   ├── multi_agent.go             # 多Agent工作流
+│   ├── command.go                 # AgentCommand实现
+│   ├── handoff.go                 # Handoff机制
+│   ├── human_node.go              # Human-in-the-Loop节点
+│   └── types.go                   # 工作流类型定义

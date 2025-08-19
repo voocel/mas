@@ -24,6 +24,35 @@ MAS (Multi-Agent System) 是一个轻量级、优雅的Go多智能体框架，�
 - **工具系统**: 可扩展的工具框架，支持沙箱安全
 - **内存管理**: 对话和摘要内存实现
 - **LLM集成**: 基于 [litellm](https://github.com/voocel/litellm) 支持多个提供商
+- **层次化认知架构**: 受脑-小脑启发的分层智能
+  - **四层处理**: 反射层 → 小脑层 → 皮层 → 元认知层
+  - **自动层次选择**: 智能选择最优处理层次
+  - **技能库系统**: 可插拔的认知能力和学习行为
+  - **认知状态监控**: 实时认知状态追踪和内省
+  - **自适应处理**: 在反应式和深思熟虑模式间动态切换
+- **自主目标管理**: 具备智能策略的自主任务执行
+  - **目标分解**: 自动将复杂目标分解为可执行步骤
+  - **多种策略**: 顺序、并行、优先级和自适应执行策略
+  - **进度监控**: 实时追踪目标完成情况和策略调整
+  - **学习集成**: 性能洞察和持续改进
+- **学习与适应**: 通过经验和自我反思持续改进
+  - **经验记录**: 详细记录所有交互和结果
+  - **模式识别**: 识别成功和失败的行为模式
+  - **自我反思**: Agent分析和改进自身行为的能力
+  - **性能预测**: 基于历史数据预测行动成功概率
+  - **策略优化**: 基于学习动态调整决策策略
+- **动态协作拓扑**: 智能多智能体网络组织
+  - **七种拓扑类型**: 星型、链式、网状、层次、中心、环形和自适应模式
+  - **六种协作模式**: 竞争、合作、委托、共识、专业化和群体模式
+  - **智能任务分配**: 基于能力和负载的最优任务分配
+  - **实时性能分析**: 全面的网络指标和瓶颈预测
+  - **自动优化**: 基于性能标准的动态拓扑重组
+  - **负载均衡**: 智能重分配以防止瓶颈并优化效率
+- **事件系统**: 实时可观测性和监控
+  - **实时事件**: 实时执行追踪和进度更新
+  - **性能监控**: 内置指标和性能分析
+  - **错误追踪**: 详细的错误上下文和调试信息
+  - **企业集成**: 轻松集成监控系统
 - **检查点与恢复**: 高级工作流持久化和恢复系统
   - **自动检查点**: 在关键点自动保存状态
   - **智能恢复**: 从中断点继续执行
@@ -41,6 +70,11 @@ mas/
 ├── workflow.go         # 工作流编排和状态管理
 ├── tool.go             # 工具框架和接口
 ├── memory.go           # 内存系统（对话、摘要）
+├── event.go            # 事件系统，实时可观测性
+├── cognitive.go        # 层次化认知架构（脑-小脑模式）
+├── autonomous.go       # 自主目标管理和执行策略
+├── learning.go         # 学习和适应机制
+├── topology.go         # 动态协作拓扑管理
 ├── checkpoint.go       # 检查点接口和工具
 ├── types.go            # 核心类型定义和接口
 ├── errors.go           # 错误类型和处理
@@ -71,10 +105,17 @@ mas/
 │   ├── redis.go        # Redis存储 (+build redis)
 │   └── sqlite.go       # SQLite存储 (+build sqlite)
 ├── tools/              # 内置工具生态系统
+├── skills/             # 认知技能实现
+│   └── basic.go        # 数学、文本分析、规划技能
 ├── examples/           # 使用示例
 │   ├── basic/          # 基础智能体使用
 │   ├── workflow/       # 多智能体工作流
 │   ├── tools/          # 自定义工具和多工具使用
+│   ├── cognitive/      # 层次化认知架构
+│   ├── autonomous/     # 自主目标管理
+│   ├── learning/       # 学习和适应
+│   ├── topology/       # 动态协作拓扑
+│   ├── events/         # 事件系统和实时监控
 │   ├── baseurl/        # 自定义API端点
 │   ├── checkpoint/     # 检查点和恢复
 │   └── verify/         # 安装验证
@@ -136,6 +177,124 @@ func main() {
 }
 ```
 
+### 使用高级智能体能力（可选）
+
+```go
+import "github.com/voocel/mas/skills"
+
+func main() {
+    // 创建具备完整AI能力的高级智能体
+    agent := mas.NewAgent("gpt-4", os.Getenv("OPENAI_API_KEY")).
+        WithSystemPrompt("你是一个智能助手。").
+        WithSkills(
+            skills.MathSkill(),         // 小脑层：自动数学运算
+            skills.TextAnalysisSkill(), // 皮层：复杂分析
+            skills.QuickResponseSkill(), // 反射层：即时响应
+            skills.PlanningSkill(),     // 元认知层：高层规划
+        ).
+        SetCognitiveMode(mas.AutomaticMode).     // 自动选择最优层次
+        WithGoalManager(mas.NewGoalManager()).   // 启用自主目标
+        WithLearningEngine(mas.NewLearningEngine()) // 启用学习能力
+    
+    // 自主目标执行
+    goal := mas.NewGoal("research_project", "研究AI趋势并创建报告", mas.HighPriority)
+    agent.AddGoal(context.Background(), goal)
+    agent.StartAutonomous(context.Background()) // 自主运行
+    
+    // 认知技能执行（小脑层）
+    result, _ := agent.ExecuteSkill(context.Background(), "math_calculation", 
+        map[string]interface{}{"expression": "25 * 4 + 10"})
+    fmt.Printf("数学结果: %v\n", result)
+    
+    // 从经验中学习
+    agent.RecordExperience(context.Background(), mas.NewExperience(
+        mas.TaskExecution, "完成数学任务", true, 0.95, nil))
+    
+    // 自我反思以改进
+    reflection, _ := agent.SelfReflect(context.Background(), 
+        "我如何改进数学计算性能？")
+    fmt.Printf("自我反思: %s\n", reflection.Insights)
+    
+    // 监控学习指标
+    metrics := agent.GetLearningMetrics()
+    fmt.Printf("学习率: %.2f，适应率: %.2f\n", 
+        metrics.LearningRate, metrics.AdaptationRate)
+}
+```
+
+### 使用动态协作拓扑（可选）
+
+```go
+func main() {
+    // 创建多智能体协作的动态拓扑
+    topology := mas.NewDynamicTopology(mas.AdaptiveTopology, mas.SwarmMode)
+    
+    // 创建专业化智能体
+    coordinator := mas.NewAgent("gpt-4", apiKey).
+        WithSystemPrompt("你是项目协调员。")
+    specialist := mas.NewAgent("gpt-4", apiKey).
+        WithSystemPrompt("你是领域专家。")
+    worker := mas.NewAgent("gpt-4", apiKey).
+        WithSystemPrompt("你是任务执行者。")
+    
+    // 将智能体作为拓扑节点添加，指定角色和能力
+    topology.AddNode(mas.NewTopologyNode(coordinator, mas.CoordinatorRole, 
+        []string{"规划", "协调"}))
+    topology.AddNode(mas.NewTopologyNode(specialist, mas.SpecialistRole, 
+        []string{"分析", "研究"}))
+    topology.AddNode(mas.NewTopologyNode(worker, mas.WorkerRole, 
+        []string{"执行", "处理"}))
+    
+    // 智能任务分配
+    task := mas.NewCollaborationTask("数据分析", 3, 
+        []string{"分析", "协调"})
+    assignment, _ := topology.DistributeTask(context.Background(), task)
+    fmt.Printf("任务分配给: %v（协调员: %s）\n", 
+        assignment.AssignedTo, assignment.Coordinator)
+    
+    // 自适应拓扑优化
+    workload := &mas.WorkloadPattern{
+        TaskTypes:        []string{"分析", "处理"},
+        IntensityProfile: map[string]float64{"分析": 0.9},
+        TimePattern:      "peak",
+    }
+    topology.AdaptToWorkload(context.Background(), workload)
+    
+    // 性能分析
+    analysis, _ := topology.AnalyzePerformance(context.Background())
+    fmt.Printf("网络效率: %.2f，推荐拓扑: %s\n", 
+        analysis.EfficiencyScore, analysis.OptimalTopology)
+}
+```
+
+### 使用事件系统（可选）
+
+```go
+func main() {
+    // 创建事件总线实现可观测性
+    eventBus := mas.NewEventBus()
+    
+    agent := mas.NewAgent("gpt-4.1", os.Getenv("OPENAI_API_KEY")).
+        WithSystemPrompt("你是一个的助手。").
+        WithEventBus(eventBus)  // 启用实时事件
+    
+    // 订阅事件进行监控
+    eventBus.Subscribe(mas.EventAgentChatStart, func(ctx context.Context, event mas.Event) error {
+        fmt.Printf("对话开始: %s\n", event.Data["message"])
+        return nil
+    })
+    
+    eventBus.Subscribe(mas.EventToolStart, func(ctx context.Context, event mas.Event) error {
+        fmt.Printf("工具执行: %s\n", event.Data["tool_name"])
+        return nil
+    })
+    
+    // 相同的API，增强了实时可观测性
+    response, _ := agent.Chat(context.Background(), "你好！")
+    fmt.Println(response)
+}
+```
+
 ### 自定义Base URL (DeepSeek、Ollama、Azure OpenAI等)
 
 ```go
@@ -175,6 +334,21 @@ cd examples/workflow && go run main.go
 
 # 自定义工具和多工具使用
 cd examples/tools && go run main.go
+
+# 事件系统和实时监控
+cd examples/events && go run main.go
+
+# 层次化认知架构
+cd examples/cognitive && go run main.go
+
+# 自主目标管理
+cd examples/autonomous && go run main.go
+
+# 学习和适应
+cd examples/learning && go run main.go
+
+# 动态协作拓扑
+cd examples/topology && go run main.go
 
 # 自定义base URL配置
 cd examples/baseurl && go run main.go
@@ -276,6 +450,10 @@ func (p *WebInputProvider) RequestInput(ctx context.Context, prompt string, opti
 - **[基本用法](examples/basic/)** - 简单的智能体交互和配置
 - **[工具用法](examples/tools/)** - 内置和自定义工具，支持沙箱
 - **[工作流编排](examples/workflow/)** - 多智能体工作流和协调
+- **[认知架构](examples/cognitive/)** - 层次化认知层次和技能系统
+- **[自主智能体](examples/autonomous/)** - 目标驱动的自主行为
+- **[学习系统](examples/learning/)** - 具备经验学习的自我改进智能体
+- **[动态拓扑](examples/topology/)** - 智能多智能体协作网络
 
 运行示例：
 

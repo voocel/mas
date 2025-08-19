@@ -8,7 +8,7 @@ import (
 	"github.com/voocel/litellm"
 )
 
-// LiteLLMProvider implements Provider interface using the litellm library
+// LiteLLMProvider implements Provider and StreamProvider interfaces using the litellm library
 type LiteLLMProvider struct {
 	client *litellm.Client
 	config ProviderConfig
@@ -164,4 +164,58 @@ func (p *LiteLLMProvider) Model() string {
 func (p *LiteLLMProvider) Close() error {
 	// litellm client may have cleanup methods
 	return nil
+}
+
+// ChatStream implements streaming chat completion using litellm
+func (p *LiteLLMProvider) ChatStream(ctx context.Context, req ChatRequest) (<-chan string, error) {
+	if req.Model == "" {
+		req.Model = p.config.Model
+	}
+	if req.Temperature == 0 {
+		req.Temperature = p.config.Temperature
+	}
+	if req.MaxTokens == 0 {
+		req.MaxTokens = p.config.MaxTokens
+	}
+
+	litellmReq := &litellm.Request{
+		Model:    req.Model,
+		Messages: convertMessagesToLiteLLM(req.Messages),
+		Tools:    convertToolsToLiteLLM(req.Tools),
+		Stream:   true,
+	}
+
+	if req.Temperature != 0 {
+		litellmReq.Temperature = litellm.Float64Ptr(req.Temperature)
+	}
+	if req.MaxTokens != 0 {
+		litellmReq.MaxTokens = litellm.IntPtr(req.MaxTokens)
+	}
+
+	outputChan := make(chan string, 100)
+
+	go func() {
+		defer close(outputChan)
+
+		streamReader, err := p.client.Stream(ctx, litellmReq)
+		if err != nil {
+			return
+		}
+		defer streamReader.Close()
+
+		for {
+			chunk, err := streamReader.Read()
+			if err != nil {
+				break
+			}
+			if chunk.Content != "" {
+				outputChan <- chunk.Content
+			}
+			if chunk.Done {
+				break
+			}
+		}
+	}()
+
+	return outputChan, nil
 }

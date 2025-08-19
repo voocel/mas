@@ -10,6 +10,10 @@ type Provider interface {
 	// Chat sends a chat completion request
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 
+	// ChatStream sends a streaming chat completion request
+	// Returns a channel of content strings, or nil if streaming not supported
+	ChatStream(ctx context.Context, req ChatRequest) (<-chan string, error)
+
 	// Model returns the model name
 	Model() string
 

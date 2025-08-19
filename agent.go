@@ -178,6 +178,86 @@ func (a *agent) Chat(ctx context.Context, message string) (string, error) {
 	return choice.Message.Content, nil
 }
 
+// ChatStream implements streaming chat with the agent
+func (a *agent) ChatStream(ctx context.Context, message string) (<-chan string, error) {
+	// Emit chat start event
+	if err := a.PublishEvent(ctx, EventAgentChatStart, EventData(
+		"message", message,
+		"agent_name", a.Name(),
+	)); err != nil {
+		fmt.Printf("Failed to publish chat start event: %v\n", err)
+	}
+
+	if a.provider == nil {
+		return nil, fmt.Errorf("no LLM provider configured")
+	}
+
+	// Add message to memory
+	if a.memory != nil {
+		if err := a.memory.Add(ctx, RoleUser, message); err != nil {
+			return nil, fmt.Errorf("failed to add message to memory: %w", err)
+		}
+	}
+
+	// Prepare messages
+	messages, err := a.prepareMessages(ctx, message)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare messages: %w", err)
+	}
+
+	// Convert tools to LLM format
+	var tools []llm.ToolDefinition
+	if len(a.tools) > 0 {
+		tools = a.convertToolsToLLMFormat()
+	}
+
+	req := llm.ChatRequest{
+		Messages:    a.convertMessagesToLLM(messages),
+		Model:       a.model,
+		Temperature: a.temperature,
+		MaxTokens:   a.maxTokens,
+		Tools:       tools,
+	}
+
+	// Get streaming response
+	streamChan, err := a.provider.ChatStream(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("streaming chat failed: %w", err)
+	}
+
+	// Create output channel and process stream
+	outputChan := make(chan string, 100)
+	go func() {
+		defer close(outputChan)
+
+		var fullResponse strings.Builder
+
+		for chunk := range streamChan {
+			outputChan <- chunk
+			fullResponse.WriteString(chunk)
+		}
+
+		// Add full response to memory
+		if a.memory != nil {
+			if err := a.memory.Add(ctx, RoleAssistant, fullResponse.String()); err != nil {
+				fmt.Printf("Failed to add response to memory: %v\n", err)
+			}
+		}
+
+		// Emit chat end event
+		if err := a.PublishEvent(ctx, EventAgentChatEnd, EventData(
+			"message", message,
+			"response", fullResponse.String(),
+			"agent_name", a.Name(),
+			"success", true,
+		)); err != nil {
+			fmt.Printf("Failed to publish chat end event: %v\n", err)
+		}
+	}()
+
+	return outputChan, nil
+}
+
 func (a *agent) WithTools(tools ...Tool) Agent {
 	return &agent{
 		name:         a.name,

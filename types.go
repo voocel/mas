@@ -145,6 +145,7 @@ type FunctionCall struct {
 // Agent represents an intelligent agent
 type Agent interface {
 	Chat(ctx context.Context, message string) (string, error)
+	ChatStream(ctx context.Context, message string) (<-chan string, error)
 	WithTools(tools ...Tool) Agent
 	WithMemory(memory Memory) Agent
 	WithSystemPrompt(prompt string) Agent

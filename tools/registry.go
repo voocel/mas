@@ -209,3 +209,21 @@ func List() []Tool {
 func Has(name string) bool {
 	return globalRegistry.Has(name)
 }
+
+// RegisterFunction Register functions as tools
+func RegisterFunction(name, description string, fn ToolFunction) error {
+	tool, err := NewFunctionTool(name, description, fn)
+	if err != nil {
+		return err
+	}
+	return Register(tool)
+}
+
+// RegisterFunction Registering functions on a registry instance
+func (r *Registry) RegisterFunction(name, description string, fn ToolFunction) error {
+	tool, err := NewFunctionTool(name, description, fn)
+	if err != nil {
+		return err
+	}
+	return r.Register(tool)
+}

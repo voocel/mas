@@ -17,6 +17,11 @@ type Context interface {
 	SetState(State)
 	AddEvent(schema.StreamEvent)
 	Events() <-chan schema.StreamEvent
+
+	// State Management Methods
+	SetStateValue(key string, value interface{}) error
+	GetStateValue(key string) interface{}
+	HasStateValue(key string) bool
 }
 
 // State represents the execution state
@@ -105,6 +110,20 @@ func (c *masContext) AddEvent(event schema.StreamEvent) {
 
 func (c *masContext) Events() <-chan schema.StreamEvent {
 	return c.events
+}
+
+func (c *masContext) SetStateValue(key string, value interface{}) error {
+	return c.state.Set(key, value)
+}
+
+func (c *masContext) GetStateValue(key string) interface{} {
+	value, _ := c.state.Get(key)
+	return value
+}
+
+func (c *masContext) HasStateValue(key string) bool {
+	_, exists := c.state.Get(key)
+	return exists
 }
 
 // memoryState implements the State interface in memory

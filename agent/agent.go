@@ -97,6 +97,9 @@ type AgentCapabilities struct {
 	Description string `json:"description"`
 }
 
+type StateInputFunc func(interface{}) string
+type StateOutputFunc func(interface{}, string)
+
 // AgentConfig is the configuration for an agent.
 type AgentConfig struct {
 	ID           string             `json:"id"`
@@ -108,6 +111,10 @@ type AgentConfig struct {
 	MaxHistory   int                `json:"max_history"`
 	Temperature  float64            `json:"temperature"`
 	MaxTokens    int                `json:"max_tokens"`
+
+	StateKey       string          `json:"state_key"`
+	InputFromState StateInputFunc  `json:"-"`
+	OutputToState  StateOutputFunc `json:"-"`
 }
 
 // DefaultAgentConfig is the default agent configuration.
@@ -293,7 +300,19 @@ func (a *BaseAgent) GetCapabilities() *AgentCapabilities {
 
 // Execute performs a single turn of conversation.
 func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.Message, error) {
-	a.addToHistory(input)
+	// If state handling is configured, generate inputs from the state
+	actualInput := input
+	if a.config.StateKey != "" && a.config.InputFromState != nil {
+		if state := ctx.GetStateValue(a.config.StateKey); state != nil {
+			stateInput := a.config.InputFromState(state)
+			actualInput = schema.Message{
+				Role:    "user",
+				Content: stateInput,
+			}
+		}
+	}
+
+	a.addToHistory(actualInput)
 	messages := a.buildMessages()
 
 	// Call the model to generate a response.
@@ -307,6 +326,13 @@ func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.M
 		response, err = a.handleToolCalls(ctx, response)
 		if err != nil {
 			return schema.Message{}, schema.NewAgentError(a.ID(), "handle_tool_calls", err)
+		}
+	}
+
+	// If state handling is configured, write the output to the state
+	if a.config.StateKey != "" && a.config.OutputToState != nil {
+		if state := ctx.GetStateValue(a.config.StateKey); state != nil {
+			a.config.OutputToState(state, response.Content)
 		}
 	}
 

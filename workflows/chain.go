@@ -1,6 +1,9 @@
 package workflows
 
 import (
+	"fmt"
+
+	"github.com/voocel/mas/agent"
 	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 )
@@ -246,6 +249,20 @@ func (b *ChainBuilder) Then(node Node) *ChainBuilder {
 	return b
 }
 
+// ThenAgent Directly add the agent as a node
+func (b *ChainBuilder) ThenAgent(ag agent.Agent) *ChainBuilder {
+	node := NewAgentNode(NodeConfig{
+		Name:        ag.Name(),
+		Description: fmt.Sprintf("Agent node for %s", ag.Name()),
+	}, ag.Name(), func(agentName string) (interface{}, bool) {
+		if ag.Name() == agentName {
+			return ag, true
+		}
+		return nil, false
+	})
+	return b.Then(node)
+}
+
 // Build assembles the chain workflow
 func (b *ChainBuilder) Build() *ChainWorkflow {
 	return NewChainWorkflow(b.config, b.nodes)
@@ -353,4 +370,13 @@ func (n *FunctionNode) ExecuteStream(ctx runtime.Context, input schema.Message) 
 	}()
 
 	return eventChan, nil
+}
+
+// WithStateKey add state key
+func (w *ChainWorkflow) WithStateKey(key string) *ChainWorkflow {
+	if w.BaseWorkflow.config.Metadata == nil {
+		w.BaseWorkflow.config.Metadata = make(map[string]interface{})
+	}
+	w.BaseWorkflow.config.Metadata["state_key"] = key
+	return w
 }

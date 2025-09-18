@@ -355,3 +355,24 @@ func WithCapabilityDescription(description string) Option {
 		config.Capabilities.Description = description
 	}
 }
+
+// WithStateKey Set the state keys used by the agent
+func WithStateKey(key string) Option {
+	return func(config *AgentConfig) {
+		config.StateKey = key
+	}
+}
+
+// WithInputFromState Set the function that generates input from the state
+func WithInputFromState(fn StateInputFunc) Option {
+	return func(config *AgentConfig) {
+		config.InputFromState = fn
+	}
+}
+
+// WithOutputToState Set the function that writes output to the state
+func WithOutputToState(fn StateOutputFunc) Option {
+	return func(config *AgentConfig) {
+		config.OutputToState = fn
+	}
+}

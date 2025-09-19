@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/voocel/mas/agent"
 	"github.com/voocel/mas/runtime"
@@ -249,7 +250,7 @@ func (b *ChainBuilder) Then(node Node) *ChainBuilder {
 	return b
 }
 
-// ThenAgent Directly add the agent as a node
+// ThenAgent adds an agent directly as a node (convenience method)
 func (b *ChainBuilder) ThenAgent(ag agent.Agent) *ChainBuilder {
 	node := NewAgentNode(NodeConfig{
 		Name:        ag.Name(),
@@ -260,6 +261,48 @@ func (b *ChainBuilder) ThenAgent(ag agent.Agent) *ChainBuilder {
 		}
 		return nil, false
 	})
+	return b.Then(node)
+}
+
+// ThenParallel executes multiple agents in parallel
+func (b *ChainBuilder) ThenParallel(agents ...agent.Agent) *ChainBuilder {
+	if len(agents) == 0 {
+		return b
+	}
+
+	// Create parallel node name
+	agentNames := make([]string, len(agents))
+	for i, ag := range agents {
+		agentNames[i] = ag.Name()
+	}
+	nodeName := fmt.Sprintf("parallel_%v", agentNames)
+
+	node := NewParallelNode(NodeConfig{
+		Name:        nodeName,
+		Description: fmt.Sprintf("Parallel execution of agents: %v", agentNames),
+	}, agents)
+
+	return b.Then(node)
+}
+
+// ThenConditional executes conditional branching
+func (b *ChainBuilder) ThenConditional(conditionFunc func(ctx runtime.Context, input schema.Message) string, branches map[string][]agent.Agent) *ChainBuilder {
+	if len(branches) == 0 {
+		return b
+	}
+
+	// Create conditional branch node name
+	branchNames := make([]string, 0, len(branches))
+	for branchName := range branches {
+		branchNames = append(branchNames, branchName)
+	}
+	nodeName := fmt.Sprintf("conditional_%v", branchNames)
+
+	node := NewConditionalNode(NodeConfig{
+		Name:        nodeName,
+		Description: fmt.Sprintf("Conditional execution with branches: %v", branchNames),
+	}, conditionFunc, branches)
+
 	return b.Then(node)
 }
 
@@ -372,11 +415,163 @@ func (n *FunctionNode) ExecuteStream(ctx runtime.Context, input schema.Message) 
 	return eventChan, nil
 }
 
-// WithStateKey add state key
+// WithStateKey adds state key support to existing ChainWorkflow
 func (w *ChainWorkflow) WithStateKey(key string) *ChainWorkflow {
 	if w.BaseWorkflow.config.Metadata == nil {
 		w.BaseWorkflow.config.Metadata = make(map[string]interface{})
 	}
 	w.BaseWorkflow.config.Metadata["state_key"] = key
 	return w
+}
+
+// ParallelNode executes multiple agents in parallel
+type ParallelNode struct {
+	*BaseNode
+	agents []agent.Agent
+}
+
+// NewParallelNode creates a parallel node
+func NewParallelNode(config NodeConfig, agents []agent.Agent) *ParallelNode {
+	return &ParallelNode{
+		BaseNode: NewBaseNode(config),
+		agents:   agents,
+	}
+}
+
+func (p *ParallelNode) Execute(ctx runtime.Context, input schema.Message) (schema.Message, error) {
+	if len(p.agents) == 0 {
+		return input, nil
+	}
+
+	// Execute all agents in parallel
+	var wg sync.WaitGroup
+	results := make([]schema.Message, len(p.agents))
+	errors := make([]error, len(p.agents))
+
+	for i, ag := range p.agents {
+		wg.Add(1)
+		go func(index int, agent agent.Agent) {
+			defer wg.Done()
+
+			// Execute agent
+			result, err := agent.Execute(ctx, input)
+			results[index] = result
+			errors[index] = err
+		}(i, ag)
+	}
+
+	// Wait for all agents to complete
+	wg.Wait()
+
+	// Check for errors
+	for i, err := range errors {
+		if err != nil {
+			return schema.Message{}, fmt.Errorf("parallel agent %s failed: %v", p.agents[i].Name(), err)
+		}
+	}
+
+	// Aggregate results
+	aggregatedContent := ""
+	for i, result := range results {
+		if i > 0 {
+			aggregatedContent += "\n\n"
+		}
+		aggregatedContent += fmt.Sprintf("=== %s ===\n%s", p.agents[i].Name(), result.Content)
+	}
+
+	return schema.Message{
+		Role:    schema.RoleAssistant,
+		Content: aggregatedContent,
+	}, nil
+}
+
+func (p *ParallelNode) ExecuteStream(ctx runtime.Context, input schema.Message) (<-chan schema.StreamEvent, error) {
+	eventChan := make(chan schema.StreamEvent, 100)
+
+	go func() {
+		defer close(eventChan)
+
+		// Execute parallel node
+		result, err := p.Execute(ctx, input)
+		if err != nil {
+			eventChan <- schema.NewStreamEvent(schema.EventError, map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		eventChan <- schema.NewStreamEvent(schema.EventStepEnd, result)
+	}()
+
+	return eventChan, nil
+}
+
+func (p *ParallelNode) Condition(ctx runtime.Context, input schema.Message) bool {
+	return true // Parallel node always executes by default
+}
+
+// ConditionalNode conditional branch node
+type ConditionalNode struct {
+	*BaseNode
+	conditionFunc func(ctx runtime.Context, input schema.Message) string
+	branches      map[string][]agent.Agent
+}
+
+// NewConditionalNode creates a conditional branch node
+func NewConditionalNode(config NodeConfig, conditionFunc func(ctx runtime.Context, input schema.Message) string, branches map[string][]agent.Agent) *ConditionalNode {
+	return &ConditionalNode{
+		BaseNode:      NewBaseNode(config),
+		conditionFunc: conditionFunc,
+		branches:      branches,
+	}
+}
+
+func (c *ConditionalNode) Execute(ctx runtime.Context, input schema.Message) (schema.Message, error) {
+	// Execute condition function to get branch name
+	branchName := c.conditionFunc(ctx, input)
+	agents, exists := c.branches[branchName]
+	if !exists {
+		return schema.Message{}, fmt.Errorf("branch '%s' not found in conditional node", branchName)
+	}
+
+	if len(agents) == 0 {
+		return input, nil
+	}
+
+	// Execute agents in branch sequentially
+	currentInput := input
+	for _, ag := range agents {
+		result, err := ag.Execute(ctx, currentInput)
+		if err != nil {
+			return schema.Message{}, fmt.Errorf("agent %s in branch '%s' failed: %v", ag.Name(), branchName, err)
+		}
+		currentInput = result
+	}
+
+	return currentInput, nil
+}
+
+func (c *ConditionalNode) ExecuteStream(ctx runtime.Context, input schema.Message) (<-chan schema.StreamEvent, error) {
+	eventChan := make(chan schema.StreamEvent, 100)
+
+	go func() {
+		defer close(eventChan)
+
+		// Execute conditional branch node
+		result, err := c.Execute(ctx, input)
+		if err != nil {
+			eventChan <- schema.NewStreamEvent(schema.EventError, map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		eventChan <- schema.NewStreamEvent(schema.EventStepEnd, result)
+	}()
+
+	return eventChan, nil
+}
+
+func (c *ConditionalNode) Condition(ctx runtime.Context, input schema.Message) bool {
+	return true // Conditional branch node always executes by default
 }

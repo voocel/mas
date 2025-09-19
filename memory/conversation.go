@@ -216,12 +216,13 @@ Summary:`, conversationText)
 	// Create a runtime context.
 	runtimeCtx := runtime.NewContext(ctx, "memory-summary", "summary-"+fmt.Sprintf("%d", time.Now().UnixNano()))
 
-	response, err := model.Generate(runtimeCtx, messages)
+	req := &llm.Request{Messages: messages}
+	resp, err := model.Generate(runtimeCtx, req)
 	if err != nil {
 		return "", fmt.Errorf("AI summary failed: %w", err)
 	}
 
-	return response.Content, nil
+	return resp.Message.Content, nil
 }
 
 // buildConversationText builds the conversation text.

@@ -427,13 +427,14 @@ func (e *ExpertRoutingStrategy) taskMatchesExpertise(content, expertise string) 
 	}
 
 	ctx := runtime.NewContext(context.Background(), "swarm", "expertise_check")
-	response, err := e.llmModel.Generate(ctx, messages)
+	req := &llm.Request{Messages: messages}
+	resp, err := e.llmModel.Generate(ctx, req)
 	if err != nil {
 		// If the LLM call fails, return false.
 		return false
 	}
 
-	result := strings.TrimSpace(strings.ToLower(response.Content))
+	result := strings.TrimSpace(strings.ToLower(resp.Message.Content))
 	return strings.Contains(result, "yes") || strings.Contains(result, "true")
 }
 
@@ -454,12 +455,13 @@ func (e *ExpertRoutingStrategy) taskRequiresCapability(content string, capabilit
 	}
 
 	ctx := runtime.NewContext(context.Background(), "swarm", "capability_check")
-	response, err := e.llmModel.Generate(ctx, messages)
+	req := &llm.Request{Messages: messages}
+	resp, err := e.llmModel.Generate(ctx, req)
 	if err != nil {
 		return false
 	}
 
-	result := strings.TrimSpace(strings.ToLower(response.Content))
+	result := strings.TrimSpace(strings.ToLower(resp.Message.Content))
 	return strings.Contains(result, "yes") || strings.Contains(result, "true")
 }
 
@@ -479,13 +481,14 @@ func (e *ExpertRoutingStrategy) estimateTaskComplexity(content string) int {
 	}
 
 	ctx := runtime.NewContext(context.Background(), "swarm", "complexity_estimate")
-	response, err := e.llmModel.Generate(ctx, messages)
+	req := &llm.Request{Messages: messages}
+	resp, err := e.llmModel.Generate(ctx, req)
 	if err != nil {
 		return 5
 	}
 
 	// Parse the complexity number returned by the LLM.
-	result := strings.TrimSpace(response.Content)
+	result := strings.TrimSpace(resp.Message.Content)
 	if complexity := e.parseComplexityFromResponse(result); complexity > 0 {
 		return complexity
 	}
@@ -727,12 +730,13 @@ func (c *CapabilityMatchingStrategy) taskRequiresCapability(content string, capa
 	}
 
 	ctx := runtime.NewContext(context.Background(), "swarm", "capability_check")
-	response, err := c.llmModel.Generate(ctx, messages)
+	req := &llm.Request{Messages: messages}
+	resp, err := c.llmModel.Generate(ctx, req)
 	if err != nil {
 		return false
 	}
 
-	result := strings.TrimSpace(strings.ToLower(response.Content))
+	result := strings.TrimSpace(strings.ToLower(resp.Message.Content))
 	return strings.Contains(result, "yes") || strings.Contains(result, "true")
 }
 
@@ -752,12 +756,13 @@ func (c *CapabilityMatchingStrategy) taskMatchesExpertise(content, expertise str
 	}
 
 	ctx := runtime.NewContext(context.Background(), "swarm", "expertise_check")
-	response, err := c.llmModel.Generate(ctx, messages)
+	req := &llm.Request{Messages: messages}
+	resp, err := c.llmModel.Generate(ctx, req)
 	if err != nil {
 		return false
 	}
 
-	result := strings.TrimSpace(strings.ToLower(response.Content))
+	result := strings.TrimSpace(strings.ToLower(resp.Message.Content))
 	return strings.Contains(result, "yes") || strings.Contains(result, "true")
 }
 
@@ -777,13 +782,14 @@ func (c *CapabilityMatchingStrategy) estimateTaskComplexity(content string) int 
 	}
 
 	ctx := runtime.NewContext(context.Background(), "swarm", "complexity_estimate")
-	response, err := c.llmModel.Generate(ctx, messages)
+	req := &llm.Request{Messages: messages}
+	resp, err := c.llmModel.Generate(ctx, req)
 	if err != nil {
 		return 5
 	}
 
 	// Parse the complexity number returned by the LLM.
-	result := strings.TrimSpace(response.Content)
+	result := strings.TrimSpace(resp.Message.Content)
 	if complexity := c.parseComplexityFromResponse(result); complexity > 0 {
 		return complexity
 	}

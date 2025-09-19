@@ -315,13 +315,14 @@ func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.M
 	a.addToHistory(actualInput)
 	messages := a.buildMessages()
 
-	// Call the model to generate a response.
-	response, err := a.model.Generate(ctx, messages)
+	req := a.buildLLMRequest(messages)
+	resp, err := a.model.Generate(ctx, req)
 	if err != nil {
 		return schema.Message{}, schema.NewAgentError(a.ID(), "execute", err)
 	}
 
 	// Handle tool calls.
+	response := resp.Message
 	if response.HasToolCalls() {
 		response, err = a.handleToolCalls(ctx, response)
 		if err != nil {
@@ -350,7 +351,8 @@ func (a *BaseAgent) ExecuteStream(ctx runtime.Context, input schema.Message) (<-
 	a.addToHistory(input)
 	messages := a.buildMessages()
 
-	return a.model.GenerateStream(ctx, messages)
+	req := a.buildLLMRequest(messages)
+	return a.model.GenerateStream(ctx, req)
 }
 
 // handleToolCalls handles tool calls.
@@ -368,11 +370,13 @@ func (a *BaseAgent) handleToolCalls(ctx runtime.Context, message schema.Message)
 	toolMessages := make([]schema.Message, len(results))
 	for i, result := range results {
 		toolMessages[i] = schema.Message{
+			ID:      result.ID,
 			Role:    schema.RoleTool,
 			Content: string(result.Result),
 		}
 		if result.Error != "" {
 			toolMessages[i].Content = result.Error
+			toolMessages[i].SetMetadata("error", result.Error)
 		}
 	}
 
@@ -384,7 +388,12 @@ func (a *BaseAgent) handleToolCalls(ctx runtime.Context, message schema.Message)
 
 	// Recall the model to generate the final response.
 	messages := a.buildMessages()
-	return a.model.Generate(ctx, messages)
+	req := a.buildLLMRequest(messages)
+	r, err := a.model.Generate(ctx, req)
+	if err != nil {
+		return schema.Message{}, err
+	}
+	return r.Message, nil
 }
 
 // buildMessages builds the list of messages.
@@ -448,6 +457,47 @@ func (a *BaseAgent) UpdateConfig(config *AgentConfig) {
 	if config.SystemPrompt != "" {
 		a.config.SystemPrompt = config.SystemPrompt
 	}
+}
+
+func (a *BaseAgent) buildLLMRequest(messages []schema.Message) *llm.Request {
+	req := &llm.Request{Messages: messages}
+
+	cfg := *llm.DefaultGenerationConfig
+	if a.config.Temperature >= 0 {
+		cfg.Temperature = a.config.Temperature
+	}
+	if a.config.MaxTokens > 0 {
+		cfg.MaxTokens = a.config.MaxTokens
+	}
+	req.Config = &cfg
+
+	if a.model.SupportsTools() && len(a.toolRegistry.List()) > 0 {
+		req.Tools = a.collectToolSpecs()
+		req.ToolChoice = &llm.ToolChoiceOption{Type: "auto"}
+	}
+	return req
+}
+
+func (a *BaseAgent) collectToolSpecs() []llm.ToolSpec {
+	toolsList := a.toolRegistry.List()
+	specs := make([]llm.ToolSpec, 0, len(toolsList))
+	for _, t := range toolsList {
+		if t.Schema() == nil {
+			continue
+		}
+		params := map[string]interface{}{"type": "object"}
+		if t.Schema().Type != "" {
+			params["type"] = t.Schema().Type
+		}
+		if len(t.Schema().Properties) > 0 {
+			params["properties"] = t.Schema().Properties
+		}
+		if len(t.Schema().Required) > 0 {
+			params["required"] = t.Schema().Required
+		}
+		specs = append(specs, llm.ToolSpec{Name: t.Name(), Description: t.Description(), Parameters: params})
+	}
+	return specs
 }
 
 func (a *BaseAgent) GetConfig() *AgentConfig {

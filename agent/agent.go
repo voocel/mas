@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/runtime"
@@ -132,6 +133,7 @@ type BaseAgent struct {
 	executor     *tools.Executor
 	history      []schema.Message
 	capabilities *AgentCapabilities
+	historyMu    sync.RWMutex
 }
 
 // NewAgent creates a new agent.
@@ -408,12 +410,20 @@ func (a *BaseAgent) buildMessages() []schema.Message {
 		messages = append(messages, systemMsg)
 	}
 
-	messages = append(messages, a.history...)
+	a.historyMu.RLock()
+	historyCopy := make([]schema.Message, len(a.history))
+	copy(historyCopy, a.history)
+	a.historyMu.RUnlock()
+
+	messages = append(messages, historyCopy...)
 
 	return messages
 }
 
 func (a *BaseAgent) addToHistory(message schema.Message) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
+
 	a.history = append(a.history, message)
 	if len(a.history) > a.config.MaxHistory {
 		// Keep recent messages.
@@ -422,11 +432,15 @@ func (a *BaseAgent) addToHistory(message schema.Message) {
 }
 
 func (a *BaseAgent) ClearHistory() {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	a.history = make([]schema.Message, 0)
 }
 
 func (a *BaseAgent) GetHistory() []schema.Message {
 	// Return a copy to prevent external modification.
+	a.historyMu.RLock()
+	defer a.historyMu.RUnlock()
 	history := make([]schema.Message, len(a.history))
 	copy(history, a.history)
 	return history

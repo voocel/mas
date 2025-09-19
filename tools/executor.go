@@ -113,11 +113,18 @@ func (e *Executor) ExecuteParallel(ctx runtime.Context, toolCalls []schema.ToolC
 	results := make([]schema.ToolResult, len(toolCalls))
 	errChan := make(chan error, len(toolCalls))
 	var wg sync.WaitGroup
+	maxConcurrency := e.config.MaxConcurrency
+	if maxConcurrency <= 0 || maxConcurrency > len(toolCalls) {
+		maxConcurrency = len(toolCalls)
+	}
+	sem := make(chan struct{}, maxConcurrency)
 
 	for i, toolCall := range toolCalls {
 		wg.Add(1)
 		go func(idx int, tc schema.ToolCall) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			result, err := e.Execute(ctx, tc)
 			results[idx] = result

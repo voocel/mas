@@ -72,6 +72,9 @@ type ConversationMemory interface {
 	// If model is nil, the configured SummaryModel is used.
 	// If model is not nil, the specified model is used.
 	Summarize(ctx context.Context, model ...llm.ChatModel) (string, error)
+
+	// Clone creates a deep copy of the conversation memory.
+	Clone() ConversationMemory
 }
 
 // SharedMemory is the interface for shared memory.

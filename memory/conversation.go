@@ -40,7 +40,7 @@ func (c *conversationMemory) Add(ctx context.Context, message schema.Message) er
 		message.Timestamp = time.Now()
 	}
 
-	c.messages = append(c.messages, message)
+	c.messages = append(c.messages, *message.Clone())
 
 	// Limit the history length.
 	if len(c.messages) > c.config.MaxHistory {
@@ -186,6 +186,36 @@ func (c *conversationMemory) Summarize(ctx context.Context, model ...llm.ChatMod
 	}
 
 	return c.summarizeWithAI(ctx, summaryModel)
+}
+
+// Clone creates a deep copy of the conversation memory.
+func (c *conversationMemory) Clone() ConversationMemory {
+	return c.cloneInternal()
+}
+
+func (c *conversationMemory) CloneConversation() runtime.ConversationStore {
+	return c.cloneInternal()
+}
+
+func (c *conversationMemory) cloneInternal() *conversationMemory {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	clone := &conversationMemory{
+		messages: make([]schema.Message, len(c.messages)),
+		config:   c.config,
+	}
+
+	if c.config != nil {
+		cfgCopy := *c.config
+		clone.config = &cfgCopy
+	}
+
+	for i, msg := range c.messages {
+		clone.messages[i] = *msg.Clone()
+	}
+
+	return clone
 }
 
 // summarizeWithAI is the internal AI summarization implementation.

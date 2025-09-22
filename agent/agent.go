@@ -3,7 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/runtime"
@@ -131,9 +131,7 @@ type BaseAgent struct {
 	model        llm.ChatModel
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
-	history      []schema.Message
 	capabilities *AgentCapabilities
-	historyMu    sync.RWMutex
 }
 
 // NewAgent creates a new agent.
@@ -172,7 +170,6 @@ func NewAgent(id, name string, model llm.ChatModel, opts ...Option) *BaseAgent {
 		model:        model,
 		toolRegistry: toolRegistry,
 		executor:     executor,
-		history:      make([]schema.Message, 0),
 		capabilities: config.Capabilities,
 	}
 
@@ -314,8 +311,14 @@ func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.M
 		}
 	}
 
-	a.addToHistory(actualInput)
-	messages := a.buildMessages()
+	if err := a.appendMessage(ctx, actualInput); err != nil {
+		return schema.Message{}, schema.NewAgentError(a.ID(), "record_input", err)
+	}
+
+	messages, err := a.buildMessages(ctx)
+	if err != nil {
+		return schema.Message{}, schema.NewAgentError(a.ID(), "build_messages", err)
+	}
 
 	req := a.buildLLMRequest(messages)
 	resp, err := a.model.Generate(ctx, req)
@@ -339,7 +342,9 @@ func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.M
 		}
 	}
 
-	a.addToHistory(response)
+	if err := a.appendMessage(ctx, response); err != nil {
+		return schema.Message{}, schema.NewAgentError(a.ID(), "record_response", err)
+	}
 
 	return response, nil
 }
@@ -350,8 +355,14 @@ func (a *BaseAgent) ExecuteStream(ctx runtime.Context, input schema.Message) (<-
 		return nil, schema.NewAgentError(a.ID(), "execute_stream", schema.ErrModelNotSupported)
 	}
 
-	a.addToHistory(input)
-	messages := a.buildMessages()
+	if err := a.appendMessage(ctx, input); err != nil {
+		return nil, schema.NewAgentError(a.ID(), "record_input", err)
+	}
+
+	messages, err := a.buildMessages(ctx)
+	if err != nil {
+		return nil, schema.NewAgentError(a.ID(), "build_messages", err)
+	}
 
 	req := a.buildLLMRequest(messages)
 	return a.model.GenerateStream(ctx, req)
@@ -382,14 +393,21 @@ func (a *BaseAgent) handleToolCalls(ctx runtime.Context, message schema.Message)
 		}
 	}
 
-	// Add tool calls and results to history.
-	a.addToHistory(message)
+	// Add tool calls and results to conversation memory.
+	if err := a.appendMessage(ctx, message); err != nil {
+		return schema.Message{}, err
+	}
 	for _, toolMsg := range toolMessages {
-		a.addToHistory(toolMsg)
+		if err := a.appendMessage(ctx, toolMsg); err != nil {
+			return schema.Message{}, err
+		}
 	}
 
 	// Recall the model to generate the final response.
-	messages := a.buildMessages()
+	messages, err := a.buildMessages(ctx)
+	if err != nil {
+		return schema.Message{}, err
+	}
 	req := a.buildLLMRequest(messages)
 	r, err := a.model.Generate(ctx, req)
 	if err != nil {
@@ -399,7 +417,7 @@ func (a *BaseAgent) handleToolCalls(ctx runtime.Context, message schema.Message)
 }
 
 // buildMessages builds the list of messages.
-func (a *BaseAgent) buildMessages() []schema.Message {
+func (a *BaseAgent) buildMessages(ctx runtime.Context) ([]schema.Message, error) {
 	messages := make([]schema.Message, 0)
 
 	if a.config.SystemPrompt != "" {
@@ -410,40 +428,29 @@ func (a *BaseAgent) buildMessages() []schema.Message {
 		messages = append(messages, systemMsg)
 	}
 
-	a.historyMu.RLock()
-	historyCopy := make([]schema.Message, len(a.history))
-	copy(historyCopy, a.history)
-	a.historyMu.RUnlock()
-
-	messages = append(messages, historyCopy...)
-
-	return messages
-}
-
-func (a *BaseAgent) addToHistory(message schema.Message) {
-	a.historyMu.Lock()
-	defer a.historyMu.Unlock()
-
-	a.history = append(a.history, message)
-	if len(a.history) > a.config.MaxHistory {
-		// Keep recent messages.
-		a.history = a.history[len(a.history)-a.config.MaxHistory:]
+	conversation := ctx.Conversation()
+	history, err := conversation.GetConversationContext(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	if a.config.MaxHistory > 0 && len(history) > a.config.MaxHistory {
+		history = history[len(history)-a.config.MaxHistory:]
+	}
+
+	messages = append(messages, history...)
+	return messages, nil
 }
 
-func (a *BaseAgent) ClearHistory() {
-	a.historyMu.Lock()
-	defer a.historyMu.Unlock()
-	a.history = make([]schema.Message, 0)
-}
-
-func (a *BaseAgent) GetHistory() []schema.Message {
-	// Return a copy to prevent external modification.
-	a.historyMu.RLock()
-	defer a.historyMu.RUnlock()
-	history := make([]schema.Message, len(a.history))
-	copy(history, a.history)
-	return history
+func (a *BaseAgent) appendMessage(ctx runtime.Context, message schema.Message) error {
+	if message.Timestamp.IsZero() {
+		message.Timestamp = time.Now()
+	}
+	conversation := ctx.Conversation()
+	if err := conversation.Add(ctx, message); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *BaseAgent) AddTool(tool tools.Tool) error {

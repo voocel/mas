@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	memstore "github.com/voocel/mas/memory"
 	"github.com/voocel/mas/schema"
 )
 
@@ -25,14 +26,10 @@ type Context interface {
 	HasStateValue(key string) bool
 }
 
-// ConversationStore manages conversation history for a context
-type ConversationStore interface {
-	Add(ctx context.Context, message schema.Message) error
-	GetConversationContext(ctx context.Context) ([]schema.Message, error)
-}
+type ConversationStore = memstore.ConversationStore
 
-type cloneableConversation interface {
-	CloneConversation() ConversationStore
+type conversationCloner interface {
+	Clone() memstore.ConversationStore
 }
 
 // ContextOption configures Context creation
@@ -90,7 +87,7 @@ func NewContext(parent context.Context, sessionID, traceID string, options ...Co
 
 	conversation := opts.conversation
 	if conversation == nil {
-		conversation = newInMemoryConversation()
+		conversation = memstore.NewStore()
 	}
 
 	bufferSize := opts.eventBuffer
@@ -119,7 +116,7 @@ func NewContextWithTimeout(parent context.Context, sessionID, traceID string, ti
 
 	conversation := opts.conversation
 	if conversation == nil {
-		conversation = newInMemoryConversation()
+		conversation = memstore.NewStore()
 	}
 
 	bufferSize := opts.eventBuffer
@@ -223,13 +220,12 @@ func (c *masContext) Clone() Context {
 
 func cloneConversationStore(store ConversationStore) ConversationStore {
 	if store == nil {
-		return newInMemoryConversation()
+		return memstore.NewStore()
 	}
-	if cloneable, ok := store.(cloneableConversation); ok {
-		return cloneable.CloneConversation()
+	if cloneable, ok := store.(conversationCloner); ok {
+		return cloneable.Clone()
 	}
-	// fallback: new empty store
-	return newInMemoryConversation()
+	return memstore.NewStore()
 }
 
 func (c *masContext) SetStateValue(key string, value interface{}) error {
@@ -302,50 +298,4 @@ func (s *memoryState) Clone() State {
 	return clone
 }
 
-// In-memory conversation store
-type inMemoryConversation struct {
-	mu       sync.RWMutex
-	messages []schema.Message
-}
-
-func newInMemoryConversation() ConversationStore {
-	return &inMemoryConversation{
-		messages: make([]schema.Message, 0),
-	}
-}
-
-func (c *inMemoryConversation) Add(ctx context.Context, message schema.Message) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if message.Timestamp.IsZero() {
-		message.Timestamp = time.Now()
-	}
-
-	c.messages = append(c.messages, *message.Clone())
-	return nil
-}
-
-func (c *inMemoryConversation) GetConversationContext(ctx context.Context) ([]schema.Message, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	history := make([]schema.Message, len(c.messages))
-	for i, msg := range c.messages {
-		history[i] = *msg.Clone()
-	}
-	return history, nil
-}
-
-func (c *inMemoryConversation) CloneConversation() ConversationStore {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	clone := &inMemoryConversation{
-		messages: make([]schema.Message, len(c.messages)),
-	}
-	for i, msg := range c.messages {
-		clone.messages[i] = *msg.Clone()
-	}
-	return clone
-}
+var _ conversationCloner = (*memstore.Store)(nil)

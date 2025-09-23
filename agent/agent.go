@@ -98,31 +98,24 @@ type AgentCapabilities struct {
 	Description string `json:"description"`
 }
 
-type StateInputFunc func(interface{}) string
-type StateOutputFunc func(interface{}, string)
-
 // AgentConfig is the configuration for an agent.
 type AgentConfig struct {
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	SystemPrompt string             `json:"system_prompt"`
-	Model        llm.ChatModel      `json:"-"`
-	Tools        []tools.Tool       `json:"-"`
-	Capabilities *AgentCapabilities `json:"capabilities"`
-	MaxHistory   int                `json:"max_history"`
-	Temperature  float64            `json:"temperature"`
-	MaxTokens    int                `json:"max_tokens"`
-
-	StateKey       string          `json:"state_key"`
-	InputFromState StateInputFunc  `json:"-"`
-	OutputToState  StateOutputFunc `json:"-"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	SystemPrompt  string             `json:"system_prompt"`
+	Model         llm.ChatModel      `json:"-"`
+	Tools         []tools.Tool       `json:"-"`
+	Capabilities  *AgentCapabilities `json:"capabilities"`
+	HistoryWindow int                `json:"history_window"`
+	Temperature   float64            `json:"temperature"`
+	MaxTokens     int                `json:"max_tokens"`
 }
 
 // DefaultAgentConfig is the default agent configuration.
 var DefaultAgentConfig = &AgentConfig{
-	MaxHistory:  10,
-	Temperature: 0.7,
-	MaxTokens:   1000,
+	HistoryWindow: 10,
+	Temperature:   0.7,
+	MaxTokens:     1000,
 }
 
 // BaseAgent is the base implementation of an agent.
@@ -148,9 +141,9 @@ func NewAgent(id, name string, model llm.ChatModel, opts ...Option) *BaseAgent {
 			ConcurrencyLevel: 1,
 			Languages:        []string{"zh", "en"},
 		},
-		MaxHistory:  DefaultAgentConfig.MaxHistory,
-		Temperature: DefaultAgentConfig.Temperature,
-		MaxTokens:   DefaultAgentConfig.MaxTokens,
+		HistoryWindow: DefaultAgentConfig.HistoryWindow,
+		Temperature:   DefaultAgentConfig.Temperature,
+		MaxTokens:     DefaultAgentConfig.MaxTokens,
 	}
 
 	for _, opt := range opts {
@@ -299,19 +292,7 @@ func (a *BaseAgent) GetCapabilities() *AgentCapabilities {
 
 // Execute performs a single turn of conversation.
 func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.Message, error) {
-	// If state handling is configured, generate inputs from the state
-	actualInput := input
-	if a.config.StateKey != "" && a.config.InputFromState != nil {
-		if state := ctx.GetStateValue(a.config.StateKey); state != nil {
-			stateInput := a.config.InputFromState(state)
-			actualInput = schema.Message{
-				Role:    "user",
-				Content: stateInput,
-			}
-		}
-	}
-
-	if err := a.appendMessage(ctx, actualInput); err != nil {
+	if err := a.appendMessage(ctx, input); err != nil {
 		return schema.Message{}, schema.NewAgentError(a.ID(), "record_input", err)
 	}
 
@@ -332,13 +313,6 @@ func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.M
 		response, err = a.handleToolCalls(ctx, response)
 		if err != nil {
 			return schema.Message{}, schema.NewAgentError(a.ID(), "handle_tool_calls", err)
-		}
-	}
-
-	// If state handling is configured, write the output to the state
-	if a.config.StateKey != "" && a.config.OutputToState != nil {
-		if state := ctx.GetStateValue(a.config.StateKey); state != nil {
-			a.config.OutputToState(state, response.Content)
 		}
 	}
 
@@ -434,8 +408,8 @@ func (a *BaseAgent) buildMessages(ctx runtime.Context) ([]schema.Message, error)
 		return nil, err
 	}
 
-	if a.config.MaxHistory > 0 && len(history) > a.config.MaxHistory {
-		history = history[len(history)-a.config.MaxHistory:]
+	if a.config.HistoryWindow > 0 && len(history) > a.config.HistoryWindow {
+		history = history[len(history)-a.config.HistoryWindow:]
 	}
 
 	messages = append(messages, history...)
@@ -466,8 +440,8 @@ func (a *BaseAgent) HasTool(name string) bool {
 }
 
 func (a *BaseAgent) UpdateConfig(config *AgentConfig) {
-	if config.MaxHistory > 0 {
-		a.config.MaxHistory = config.MaxHistory
+	if config.HistoryWindow > 0 {
+		a.config.HistoryWindow = config.HistoryWindow
 	}
 	if config.Temperature >= 0 {
 		a.config.Temperature = config.Temperature

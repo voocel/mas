@@ -309,11 +309,17 @@ func (s *BaseSwarm) updateMetrics(success bool, steps int, duration time.Duratio
 }
 
 func (s *BaseSwarm) storeNextTarget(ctx runtime.Context, target string) {
-	_ = ctx.SetStateValue(swarmContextKeyNextTarget, target)
+	ctx.SetStateValue(swarmContextKeyNextTarget, target)
+	if target != "" {
+		ctx.SetStateValue(handoffNextTargetKey, coordination.Target{Name: target, Type: coordination.TargetAgent})
+	} else {
+		ctx.SetStateValue(handoffNextTargetKey, nil)
+	}
 }
 
 func (s *BaseSwarm) clearNextTarget(ctx runtime.Context) {
-	_ = ctx.SetStateValue(swarmContextKeyNextTarget, "")
+	ctx.SetStateValue(swarmContextKeyNextTarget, "")
+	ctx.SetStateValue(handoffNextTargetKey, nil)
 }
 
 func (s *BaseSwarm) nextTargetFromContext(ctx runtime.Context) string {

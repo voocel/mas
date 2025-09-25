@@ -21,7 +21,7 @@ type Context interface {
 	Conversation() ConversationStore
 	Clone() Context
 
-	SetStateValue(key string, value interface{}) error
+	SetStateValue(key string, value interface{})
 	GetStateValue(key string) interface{}
 	HasStateValue(key string) bool
 }
@@ -59,7 +59,7 @@ func WithEventBufferSize(size int) ContextOption {
 // State represents the execution state for a context
 type State interface {
 	Get(key string) (interface{}, bool)
-	Set(key string, value interface{}) error
+	Set(key string, value interface{})
 	Delete(key string) error
 	Keys() []string
 	Clone() State
@@ -228,8 +228,8 @@ func cloneConversationStore(store ConversationStore) ConversationStore {
 	return memstore.NewStore()
 }
 
-func (c *masContext) SetStateValue(key string, value interface{}) error {
-	return c.state.Set(key, value)
+func (c *masContext) SetStateValue(key string, value interface{}) {
+	c.state.Set(key, value)
 }
 
 func (c *masContext) GetStateValue(key string) interface{} {
@@ -262,11 +262,11 @@ func (s *memoryState) Get(key string) (interface{}, bool) {
 	return value, exists
 }
 
-func (s *memoryState) Set(key string, value interface{}) error {
+func (s *memoryState) Set(key string, value interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[key] = value
-	return nil
+	return
 }
 
 func (s *memoryState) Delete(key string) error {

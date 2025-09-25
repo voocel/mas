@@ -67,6 +67,8 @@ const (
 	ExecuteTypeAuto     ExecuteType = "auto"
 )
 
+const handoffNextTargetKey = schema.HandoffNextTargetStateKey
+
 // ExecutionStep records key data for each executed step.
 type ExecutionStep struct {
 	StepID   string                 `json:"step_id"`
@@ -290,6 +292,7 @@ func (r executionRunner) run(ctx runtime.Context, plan *coordination.Plan) (Exec
 	current := r.request.Input
 	trace := make([]ExecutionStep, 0, len(steps))
 	var lastTarget coordination.Target
+	r.clearNextHandoff(ctx)
 
 	for _, step := range steps {
 		target, routeErr := r.router.Route(ctx, r.coordReq, plan, step)
@@ -301,7 +304,7 @@ func (r executionRunner) run(ctx runtime.Context, plan *coordination.Plan) (Exec
 		}
 
 		start := time.Now()
-		output, execErr := r.executeStep(ctx, target, current)
+		output, stepHandoff, execErr := r.executeStep(ctx, target, current)
 		duration := time.Since(start).Milliseconds()
 
 		stepTrace := ExecutionStep{
@@ -316,6 +319,7 @@ func (r executionRunner) run(ctx runtime.Context, plan *coordination.Plan) (Exec
 		if execErr != nil {
 			stepTrace.Error = execErr.Error()
 			trace = append(trace, stepTrace)
+			r.clearNextHandoff(ctx)
 			return ExecuteResponse{}, execErr
 		}
 
@@ -323,10 +327,23 @@ func (r executionRunner) run(ctx runtime.Context, plan *coordination.Plan) (Exec
 		if target.Type == coordination.TargetAgent {
 			stepTrace.Agent = target.Name
 		}
+		if stepHandoff != nil && stepHandoff.Target != "" {
+			if stepTrace.Metadata == nil {
+				stepTrace.Metadata = make(map[string]interface{})
+			}
+			stepTrace.Metadata["handoff_target"] = stepHandoff.Target
+			if reason, ok := stepHandoff.GetContext("reason"); ok {
+				stepTrace.Metadata["handoff_reason"] = reason
+			}
+			if stepHandoff.Priority != 0 {
+				stepTrace.Metadata["handoff_priority"] = stepHandoff.Priority
+			}
+		}
 		trace = append(trace, stepTrace)
 
 		current = output
 		lastTarget = target
+		r.applyHandoff(ctx, stepHandoff)
 	}
 
 	response := ExecuteResponse{
@@ -339,24 +356,25 @@ func (r executionRunner) run(ctx runtime.Context, plan *coordination.Plan) (Exec
 	return response, nil
 }
 
-func (r executionRunner) executeStep(ctx runtime.Context, target coordination.Target, input schema.Message) (schema.Message, error) {
+func (r executionRunner) executeStep(ctx runtime.Context, target coordination.Target, input schema.Message) (schema.Message, *schema.Handoff, error) {
 	switch target.Type {
 	case coordination.TargetAgent:
 		ag, ok := r.orchestrator.GetAgent(target.Name)
 		if !ok {
-			return schema.Message{}, schema.NewAgentError(target.Name, "execute", schema.ErrAgentNotFound)
+			return schema.Message{}, nil, schema.NewAgentError(target.Name, "execute", schema.ErrAgentNotFound)
 		}
-		return ag.Execute(ctx, input)
+		return ag.ExecuteWithHandoff(ctx, input)
 	case coordination.TargetWorkflow:
 		r.orchestrator.mu.RLock()
 		workflow, exists := r.orchestrator.workflows[target.Name]
 		r.orchestrator.mu.RUnlock()
 		if !exists {
-			return schema.Message{}, schema.NewWorkflowError(target.Name, "execute", schema.ErrWorkflowNotFound)
+			return schema.Message{}, nil, schema.NewWorkflowError(target.Name, "execute", schema.ErrWorkflowNotFound)
 		}
-		return workflow.Execute(ctx, input)
+		msg, err := workflow.Execute(ctx, input)
+		return msg, nil, err
 	default:
-		return schema.Message{}, fmt.Errorf("orchestrator: unsupported target type %s", target.Type)
+		return schema.Message{}, nil, fmt.Errorf("orchestrator: unsupported target type %s", target.Type)
 	}
 }
 
@@ -509,6 +527,12 @@ func (o *BaseOrchestrator) defaultRouter() coordination.Router {
 		if step == nil {
 			return coordination.Target{}, fmt.Errorf("orchestrator: step is nil")
 		}
+		if value := ctx.GetStateValue(handoffNextTargetKey); value != nil {
+			if target, ok := asCoordinationTarget(value); ok && target.Name != "" {
+				ctx.SetStateValue(handoffNextTargetKey, nil)
+				return target, nil
+			}
+		}
 		target := coordination.MustTarget(step)
 		if target.Name == "" {
 			return coordination.Target{}, coordination.ErrNoTarget
@@ -517,12 +541,70 @@ func (o *BaseOrchestrator) defaultRouter() coordination.Router {
 	})
 }
 
+func (r executionRunner) applyHandoff(ctx runtime.Context, handoff *schema.Handoff) {
+	if handoff == nil || handoff.Target == "" {
+		r.clearNextHandoff(ctx)
+		ctx.SetStateValue(schema.HandoffPendingStateKey, nil)
+		return
+	}
+
+	target, ok := r.orchestrator.resolveCoordinationTarget(handoff.Target)
+	if !ok {
+		r.clearNextHandoff(ctx)
+		ctx.SetStateValue(schema.HandoffPendingStateKey, nil)
+		return
+	}
+
+	ctx.SetStateValue(handoffNextTargetKey, target)
+	ctx.SetStateValue(schema.HandoffPendingStateKey, handoff)
+}
+
+func (r executionRunner) clearNextHandoff(ctx runtime.Context) {
+	ctx.SetStateValue(handoffNextTargetKey, nil)
+}
+
 func makeTargets(names []string, targetType coordination.TargetType) []coordination.Target {
 	targets := make([]coordination.Target, 0, len(names))
 	for _, name := range names {
 		targets = append(targets, coordination.Target{Name: name, Type: targetType})
 	}
 	return targets
+}
+
+func (o *BaseOrchestrator) resolveCoordinationTarget(name string) (coordination.Target, bool) {
+	if name == "" {
+		return coordination.Target{}, false
+	}
+
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+
+	if _, ok := o.agents[name]; ok {
+		return coordination.Target{Name: name, Type: coordination.TargetAgent}, true
+	}
+	for key, ag := range o.agents {
+		if ag.ID() == name {
+			return coordination.Target{Name: key, Type: coordination.TargetAgent}, true
+		}
+	}
+	if _, ok := o.workflows[name]; ok {
+		return coordination.Target{Name: name, Type: coordination.TargetWorkflow}, true
+	}
+	return coordination.Target{}, false
+}
+
+func asCoordinationTarget(value interface{}) (coordination.Target, bool) {
+	switch v := value.(type) {
+	case coordination.Target:
+		if v.Name != "" {
+			return v, true
+		}
+	case *coordination.Target:
+		if v != nil && v.Name != "" {
+			return *v, true
+		}
+	}
+	return coordination.Target{}, false
 }
 
 func filterTargetsByCapability(agentNames []string, agents map[string]agent.Agent, capabilities []agent.Capability) []coordination.Target {

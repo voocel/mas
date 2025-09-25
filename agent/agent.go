@@ -195,6 +195,12 @@ func (a *BaseAgent) ExecuteWithHandoff(ctx runtime.Context, input schema.Message
 
 	// Check for handoff tool calls.
 	handoff := a.extractHandoffFromResponse(response)
+	if handoff == nil {
+		handoff = schema.HandoffFromInterface(ctx.GetStateValue(schema.HandoffPendingStateKey))
+	}
+	if handoff != nil {
+		ctx.SetStateValue(schema.HandoffPendingStateKey, nil)
+	}
 
 	return response, handoff, nil
 }
@@ -212,6 +218,11 @@ func (a *BaseAgent) CanHandoff() bool {
 
 // extractHandoffFromResponse extracts handoff information from the response.
 func (a *BaseAgent) extractHandoffFromResponse(response schema.Message) *schema.Handoff {
+	if value, ok := response.GetMetadata("handoff"); ok {
+		if handoff := schema.HandoffFromInterface(value); handoff != nil {
+			return handoff
+		}
+	}
 	// Check for transfer function in tool calls.
 	for _, toolCall := range response.ToolCalls {
 		if strings.HasPrefix(toolCall.Name, "transfer_to_") {

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	memstore "github.com/voocel/mas/memory"
 	"github.com/voocel/mas/schema"
 )
 
@@ -17,17 +18,48 @@ type Context interface {
 	SetState(State)
 	AddEvent(schema.StreamEvent)
 	Events() <-chan schema.StreamEvent
+	Conversation() ConversationStore
+	Clone() Context
 
-	// State Management Methods
-	SetStateValue(key string, value interface{}) error
+	SetStateValue(key string, value interface{})
 	GetStateValue(key string) interface{}
 	HasStateValue(key string) bool
 }
 
-// State represents the execution state
+type ConversationStore = memstore.ConversationStore
+
+type conversationCloner interface {
+	Clone() memstore.ConversationStore
+}
+
+// ContextOption configures Context creation
+type ContextOption func(*contextOptions)
+
+type contextOptions struct {
+	conversation ConversationStore
+	eventBuffer  int
+}
+
+// WithConversation injects a custom conversation store implementation
+func WithConversation(store ConversationStore) ContextOption {
+	return func(opts *contextOptions) {
+		opts.conversation = store
+	}
+}
+
+// WithEventBufferSize configures the event channel buffer size (defaults to 100)
+func WithEventBufferSize(size int) ContextOption {
+	return func(opts *contextOptions) {
+		if size > 0 {
+			opts.eventBuffer = size
+		}
+	}
+}
+
+// State represents the execution state for a context
 type State interface {
 	Get(key string) (interface{}, bool)
-	Set(key string, value interface{}) error
+	Set(key string, value interface{})
 	Delete(key string) error
 	Keys() []string
 	Clone() State
@@ -35,44 +67,83 @@ type State interface {
 
 type masContext struct {
 	context.Context
-	sessionID string
-	traceID   string
-	state     State
-	events    chan schema.StreamEvent
-	mu        sync.RWMutex
+	sessionID    string
+	traceID      string
+	state        State
+	events       chan schema.StreamEvent
+	conversation ConversationStore
+	mu           sync.RWMutex
 }
 
+const defaultEventBuffer = 100
+
 // NewContext creates a new MAS execution context
-func NewContext(parent context.Context, sessionID, traceID string) Context {
+func NewContext(parent context.Context, sessionID, traceID string, options ...ContextOption) Context {
 	if parent == nil {
 		parent = context.Background()
 	}
 
+	opts := applyOptions(options...)
+
+	conversation := opts.conversation
+	if conversation == nil {
+		conversation = memstore.NewStore()
+	}
+
+	bufferSize := opts.eventBuffer
+	if bufferSize <= 0 {
+		bufferSize = defaultEventBuffer
+	}
+
 	return &masContext{
-		Context:   parent,
-		sessionID: sessionID,
-		traceID:   traceID,
-		state:     NewMemoryState(),
-		events:    make(chan schema.StreamEvent, 100), // Buffer 100 events
+		Context:      parent,
+		sessionID:    sessionID,
+		traceID:      traceID,
+		state:        NewMemoryState(),
+		events:       make(chan schema.StreamEvent, bufferSize),
+		conversation: conversation,
 	}
 }
 
 // NewContextWithTimeout creates a context with a timeout
-func NewContextWithTimeout(parent context.Context, sessionID, traceID string, timeout time.Duration) (Context, context.CancelFunc) {
+func NewContextWithTimeout(parent context.Context, sessionID, traceID string, timeout time.Duration, options ...ContextOption) (Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
 
 	ctx, cancel := context.WithTimeout(parent, timeout)
+	opts := applyOptions(options...)
+
+	conversation := opts.conversation
+	if conversation == nil {
+		conversation = memstore.NewStore()
+	}
+
+	bufferSize := opts.eventBuffer
+	if bufferSize <= 0 {
+		bufferSize = defaultEventBuffer
+	}
+
 	masCtx := &masContext{
-		Context:   ctx,
-		sessionID: sessionID,
-		traceID:   traceID,
-		state:     NewMemoryState(),
-		events:    make(chan schema.StreamEvent, 100),
+		Context:      ctx,
+		sessionID:    sessionID,
+		traceID:      traceID,
+		state:        NewMemoryState(),
+		events:       make(chan schema.StreamEvent, bufferSize),
+		conversation: conversation,
 	}
 
 	return masCtx, cancel
+}
+
+func applyOptions(options ...ContextOption) contextOptions {
+	opts := contextOptions{}
+	for _, opt := range options {
+		if opt != nil {
+			opt(&opts)
+		}
+	}
+	return opts
 }
 
 func (c *masContext) SessionID() string {
@@ -99,7 +170,6 @@ func (c *masContext) AddEvent(event schema.StreamEvent) {
 	select {
 	case c.events <- event:
 	default:
-		// If the channel is full, drop the oldest event
 		select {
 		case <-c.events:
 		default:
@@ -112,8 +182,54 @@ func (c *masContext) Events() <-chan schema.StreamEvent {
 	return c.events
 }
 
-func (c *masContext) SetStateValue(key string, value interface{}) error {
-	return c.state.Set(key, value)
+func (c *masContext) Conversation() ConversationStore {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.conversation
+}
+
+func (c *masContext) Clone() Context {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var clonedState State
+	if c.state != nil {
+		clonedState = c.state.Clone()
+	} else {
+		clonedState = NewMemoryState()
+	}
+
+	clonedConversation := cloneConversationStore(c.conversation)
+
+	bufferSize := cap(c.events)
+	if bufferSize <= 0 {
+		bufferSize = defaultEventBuffer
+	}
+
+	clone := &masContext{
+		Context:      c.Context,
+		sessionID:    c.sessionID,
+		traceID:      c.traceID,
+		state:        clonedState,
+		events:       make(chan schema.StreamEvent, bufferSize),
+		conversation: clonedConversation,
+	}
+
+	return clone
+}
+
+func cloneConversationStore(store ConversationStore) ConversationStore {
+	if store == nil {
+		return memstore.NewStore()
+	}
+	if cloneable, ok := store.(conversationCloner); ok {
+		return cloneable.Clone()
+	}
+	return memstore.NewStore()
+}
+
+func (c *masContext) SetStateValue(key string, value interface{}) {
+	c.state.Set(key, value)
 }
 
 func (c *masContext) GetStateValue(key string) interface{} {
@@ -146,11 +262,11 @@ func (s *memoryState) Get(key string) (interface{}, bool) {
 	return value, exists
 }
 
-func (s *memoryState) Set(key string, value interface{}) error {
+func (s *memoryState) Set(key string, value interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data[key] = value
-	return nil
+	return
 }
 
 func (s *memoryState) Delete(key string) error {
@@ -175,50 +291,11 @@ func (s *memoryState) Clone() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	clone := &memoryState{
-		data: make(map[string]interface{}),
-	}
-
+	clone := NewMemoryState()
 	for k, v := range s.data {
-		clone.data[k] = v
+		clone.Set(k, v)
 	}
-
 	return clone
 }
 
-// WithState stores a key/value pair in the context state
-func WithState(ctx Context, key string, value interface{}) Context {
-	ctx.State().Set(key, value)
-	return ctx
-}
-
-// GetState retrieves a value from the context state
-func GetState(ctx Context, key string) (interface{}, bool) {
-	return ctx.State().Get(key)
-}
-
-// GetStateString retrieves a string value from the context state
-func GetStateString(ctx Context, key string) (string, bool) {
-	value, exists := ctx.State().Get(key)
-	if !exists {
-		return "", false
-	}
-
-	if str, ok := value.(string); ok {
-		return str, true
-	}
-	return "", false
-}
-
-// GetStateInt retrieves an integer value from the context state
-func GetStateInt(ctx Context, key string) (int, bool) {
-	value, exists := ctx.State().Get(key)
-	if !exists {
-		return 0, false
-	}
-
-	if i, ok := value.(int); ok {
-		return i, true
-	}
-	return 0, false
-}
+var _ conversationCloner = (*memstore.Store)(nil)

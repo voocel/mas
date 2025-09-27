@@ -1,37 +1,46 @@
 package schema
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Handoff represents a control transfer between agents
 // This is the core primitive for multi-agent collaboration and handoffs
 type Handoff struct {
 	// Target is the destination agent or node name
 	Target string `json:"target"`
-	
+
 	// Payload carries the data delivered to the target
 	Payload map[string]interface{} `json:"payload,omitempty"`
-	
+
 	// Context carries additional contextual information
 	Context map[string]interface{} `json:"context,omitempty"`
-	
+
 	// Priority indicates urgency (1-10, 10 is highest)
 	Priority int `json:"priority,omitempty"`
-	
+
 	// Timeout sets the expiration window
 	Timeout time.Duration `json:"timeout,omitempty"`
-	
+
 	// Metadata stores arbitrary metadata
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
+
+// State keys shared across the framework for storing handoff metadata.
+const (
+	HandoffPendingStateKey    = "handoff.pending"
+	HandoffNextTargetStateKey = "handoff.next_target"
+)
 
 // HandoffType enumerates the supported handoff types
 type HandoffType string
 
 const (
-	HandoffTypeDelegate   HandoffType = "delegate"   // Delegate: assign the task to another agent
+	HandoffTypeDelegate    HandoffType = "delegate"    // Delegate: assign the task to another agent
 	HandoffTypeCollaborate HandoffType = "collaborate" // Collaborate: work with another agent to complete the task
-	HandoffTypeEscalate   HandoffType = "escalate"   // Escalate: forward the task to a higher-tier agent
-	HandoffTypeRoute      HandoffType = "route"      // Route: forward the task to another agent based on routing conditions
+	HandoffTypeEscalate    HandoffType = "escalate"    // Escalate: forward the task to a higher-tier agent
+	HandoffTypeRoute       HandoffType = "route"       // Route: forward the task to another agent based on routing conditions
 )
 
 // HandoffRequest describes a handoff request
@@ -126,13 +135,13 @@ func (h *Handoff) IsValid() bool {
 type HandoffManager interface {
 	// RegisterHandler registers a handoff handler
 	RegisterHandler(target string, handler HandoffHandler) error
-	
+
 	// Execute runs the handoff
 	Execute(request HandoffRequest) (HandoffResponse, error)
-	
+
 	// CanHandle checks whether a target can be handled
 	CanHandle(target string) bool
-	
+
 	// ListTargets lists all available handoff targets
 	ListTargets() []string
 }
@@ -141,7 +150,7 @@ type HandoffManager interface {
 type HandoffHandler interface {
 	// Handle processes the handoff request
 	Handle(request HandoffRequest) (HandoffResponse, error)
-	
+
 	// CanHandle determines whether the handler supports the request
 	CanHandle(request HandoffRequest) bool
 }
@@ -175,4 +184,27 @@ func NewHandoffEvent(eventType, from, to string, success bool) *HandoffEvent {
 		Timestamp: time.Now(),
 		Metadata:  make(map[string]interface{}),
 	}
+}
+
+// HandoffFromInterface attempts to convert an arbitrary value into a *Handoff.
+func HandoffFromInterface(value interface{}) *Handoff {
+	switch v := value.(type) {
+	case *Handoff:
+		if v != nil && v.Target != "" {
+			return v
+		}
+	case Handoff:
+		h := v
+		if h.Target != "" {
+			return &h
+		}
+	case map[string]interface{}:
+		if data, err := json.Marshal(v); err == nil {
+			var h Handoff
+			if err := json.Unmarshal(data, &h); err == nil && h.Target != "" {
+				return &h
+			}
+		}
+	}
+	return nil
 }

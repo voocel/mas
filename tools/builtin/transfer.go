@@ -73,7 +73,7 @@ func (t *TransferTool) Execute(ctx runtime.Context, input json.RawMessage) (json
 	}
 
 	// Persist the handoff in the runtime context
-	ctx.State().Set("pending_handoff", handoff)
+	ctx.SetStateValue(schema.HandoffPendingStateKey, handoff)
 
 	result := fmt.Sprintf("Transferring to %s agent...", t.targetAgent)
 	return json.Marshal(result)

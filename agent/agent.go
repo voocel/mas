@@ -3,7 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/runtime"
@@ -98,31 +98,24 @@ type AgentCapabilities struct {
 	Description string `json:"description"`
 }
 
-type StateInputFunc func(interface{}) string
-type StateOutputFunc func(interface{}, string)
-
 // AgentConfig is the configuration for an agent.
 type AgentConfig struct {
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	SystemPrompt string             `json:"system_prompt"`
-	Model        llm.ChatModel      `json:"-"`
-	Tools        []tools.Tool       `json:"-"`
-	Capabilities *AgentCapabilities `json:"capabilities"`
-	MaxHistory   int                `json:"max_history"`
-	Temperature  float64            `json:"temperature"`
-	MaxTokens    int                `json:"max_tokens"`
-
-	StateKey       string          `json:"state_key"`
-	InputFromState StateInputFunc  `json:"-"`
-	OutputToState  StateOutputFunc `json:"-"`
+	ID            string             `json:"id"`
+	Name          string             `json:"name"`
+	SystemPrompt  string             `json:"system_prompt"`
+	Model         llm.ChatModel      `json:"-"`
+	Tools         []tools.Tool       `json:"-"`
+	Capabilities  *AgentCapabilities `json:"capabilities"`
+	HistoryWindow int                `json:"history_window"`
+	Temperature   float64            `json:"temperature"`
+	MaxTokens     int                `json:"max_tokens"`
 }
 
 // DefaultAgentConfig is the default agent configuration.
 var DefaultAgentConfig = &AgentConfig{
-	MaxHistory:  10,
-	Temperature: 0.7,
-	MaxTokens:   1000,
+	HistoryWindow: 10,
+	Temperature:   0.7,
+	MaxTokens:     1000,
 }
 
 // BaseAgent is the base implementation of an agent.
@@ -131,9 +124,7 @@ type BaseAgent struct {
 	model        llm.ChatModel
 	toolRegistry *tools.Registry
 	executor     *tools.Executor
-	history      []schema.Message
 	capabilities *AgentCapabilities
-	historyMu    sync.RWMutex
 }
 
 // NewAgent creates a new agent.
@@ -150,9 +141,9 @@ func NewAgent(id, name string, model llm.ChatModel, opts ...Option) *BaseAgent {
 			ConcurrencyLevel: 1,
 			Languages:        []string{"zh", "en"},
 		},
-		MaxHistory:  DefaultAgentConfig.MaxHistory,
-		Temperature: DefaultAgentConfig.Temperature,
-		MaxTokens:   DefaultAgentConfig.MaxTokens,
+		HistoryWindow: DefaultAgentConfig.HistoryWindow,
+		Temperature:   DefaultAgentConfig.Temperature,
+		MaxTokens:     DefaultAgentConfig.MaxTokens,
 	}
 
 	for _, opt := range opts {
@@ -172,7 +163,6 @@ func NewAgent(id, name string, model llm.ChatModel, opts ...Option) *BaseAgent {
 		model:        model,
 		toolRegistry: toolRegistry,
 		executor:     executor,
-		history:      make([]schema.Message, 0),
 		capabilities: config.Capabilities,
 	}
 
@@ -205,6 +195,12 @@ func (a *BaseAgent) ExecuteWithHandoff(ctx runtime.Context, input schema.Message
 
 	// Check for handoff tool calls.
 	handoff := a.extractHandoffFromResponse(response)
+	if handoff == nil {
+		handoff = schema.HandoffFromInterface(ctx.GetStateValue(schema.HandoffPendingStateKey))
+	}
+	if handoff != nil {
+		ctx.SetStateValue(schema.HandoffPendingStateKey, nil)
+	}
 
 	return response, handoff, nil
 }
@@ -222,6 +218,11 @@ func (a *BaseAgent) CanHandoff() bool {
 
 // extractHandoffFromResponse extracts handoff information from the response.
 func (a *BaseAgent) extractHandoffFromResponse(response schema.Message) *schema.Handoff {
+	if value, ok := response.GetMetadata("handoff"); ok {
+		if handoff := schema.HandoffFromInterface(value); handoff != nil {
+			return handoff
+		}
+	}
 	// Check for transfer function in tool calls.
 	for _, toolCall := range response.ToolCalls {
 		if strings.HasPrefix(toolCall.Name, "transfer_to_") {
@@ -302,20 +303,14 @@ func (a *BaseAgent) GetCapabilities() *AgentCapabilities {
 
 // Execute performs a single turn of conversation.
 func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.Message, error) {
-	// If state handling is configured, generate inputs from the state
-	actualInput := input
-	if a.config.StateKey != "" && a.config.InputFromState != nil {
-		if state := ctx.GetStateValue(a.config.StateKey); state != nil {
-			stateInput := a.config.InputFromState(state)
-			actualInput = schema.Message{
-				Role:    "user",
-				Content: stateInput,
-			}
-		}
+	if err := a.appendMessage(ctx, input); err != nil {
+		return schema.Message{}, schema.NewAgentError(a.ID(), "record_input", err)
 	}
 
-	a.addToHistory(actualInput)
-	messages := a.buildMessages()
+	messages, err := a.buildMessages(ctx)
+	if err != nil {
+		return schema.Message{}, schema.NewAgentError(a.ID(), "build_messages", err)
+	}
 
 	req := a.buildLLMRequest(messages)
 	resp, err := a.model.Generate(ctx, req)
@@ -332,14 +327,9 @@ func (a *BaseAgent) Execute(ctx runtime.Context, input schema.Message) (schema.M
 		}
 	}
 
-	// If state handling is configured, write the output to the state
-	if a.config.StateKey != "" && a.config.OutputToState != nil {
-		if state := ctx.GetStateValue(a.config.StateKey); state != nil {
-			a.config.OutputToState(state, response.Content)
-		}
+	if err := a.appendMessage(ctx, response); err != nil {
+		return schema.Message{}, schema.NewAgentError(a.ID(), "record_response", err)
 	}
-
-	a.addToHistory(response)
 
 	return response, nil
 }
@@ -350,8 +340,14 @@ func (a *BaseAgent) ExecuteStream(ctx runtime.Context, input schema.Message) (<-
 		return nil, schema.NewAgentError(a.ID(), "execute_stream", schema.ErrModelNotSupported)
 	}
 
-	a.addToHistory(input)
-	messages := a.buildMessages()
+	if err := a.appendMessage(ctx, input); err != nil {
+		return nil, schema.NewAgentError(a.ID(), "record_input", err)
+	}
+
+	messages, err := a.buildMessages(ctx)
+	if err != nil {
+		return nil, schema.NewAgentError(a.ID(), "build_messages", err)
+	}
 
 	req := a.buildLLMRequest(messages)
 	return a.model.GenerateStream(ctx, req)
@@ -382,14 +378,21 @@ func (a *BaseAgent) handleToolCalls(ctx runtime.Context, message schema.Message)
 		}
 	}
 
-	// Add tool calls and results to history.
-	a.addToHistory(message)
+	// Add tool calls and results to conversation memory.
+	if err := a.appendMessage(ctx, message); err != nil {
+		return schema.Message{}, err
+	}
 	for _, toolMsg := range toolMessages {
-		a.addToHistory(toolMsg)
+		if err := a.appendMessage(ctx, toolMsg); err != nil {
+			return schema.Message{}, err
+		}
 	}
 
 	// Recall the model to generate the final response.
-	messages := a.buildMessages()
+	messages, err := a.buildMessages(ctx)
+	if err != nil {
+		return schema.Message{}, err
+	}
 	req := a.buildLLMRequest(messages)
 	r, err := a.model.Generate(ctx, req)
 	if err != nil {
@@ -399,7 +402,7 @@ func (a *BaseAgent) handleToolCalls(ctx runtime.Context, message schema.Message)
 }
 
 // buildMessages builds the list of messages.
-func (a *BaseAgent) buildMessages() []schema.Message {
+func (a *BaseAgent) buildMessages(ctx runtime.Context) ([]schema.Message, error) {
 	messages := make([]schema.Message, 0)
 
 	if a.config.SystemPrompt != "" {
@@ -410,40 +413,29 @@ func (a *BaseAgent) buildMessages() []schema.Message {
 		messages = append(messages, systemMsg)
 	}
 
-	a.historyMu.RLock()
-	historyCopy := make([]schema.Message, len(a.history))
-	copy(historyCopy, a.history)
-	a.historyMu.RUnlock()
-
-	messages = append(messages, historyCopy...)
-
-	return messages
-}
-
-func (a *BaseAgent) addToHistory(message schema.Message) {
-	a.historyMu.Lock()
-	defer a.historyMu.Unlock()
-
-	a.history = append(a.history, message)
-	if len(a.history) > a.config.MaxHistory {
-		// Keep recent messages.
-		a.history = a.history[len(a.history)-a.config.MaxHistory:]
+	conversation := ctx.Conversation()
+	history, err := conversation.GetConversationContext(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	if a.config.HistoryWindow > 0 && len(history) > a.config.HistoryWindow {
+		history = history[len(history)-a.config.HistoryWindow:]
+	}
+
+	messages = append(messages, history...)
+	return messages, nil
 }
 
-func (a *BaseAgent) ClearHistory() {
-	a.historyMu.Lock()
-	defer a.historyMu.Unlock()
-	a.history = make([]schema.Message, 0)
-}
-
-func (a *BaseAgent) GetHistory() []schema.Message {
-	// Return a copy to prevent external modification.
-	a.historyMu.RLock()
-	defer a.historyMu.RUnlock()
-	history := make([]schema.Message, len(a.history))
-	copy(history, a.history)
-	return history
+func (a *BaseAgent) appendMessage(ctx runtime.Context, message schema.Message) error {
+	if message.Timestamp.IsZero() {
+		message.Timestamp = time.Now()
+	}
+	conversation := ctx.Conversation()
+	if err := conversation.Add(ctx, message); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *BaseAgent) AddTool(tool tools.Tool) error {
@@ -459,8 +451,8 @@ func (a *BaseAgent) HasTool(name string) bool {
 }
 
 func (a *BaseAgent) UpdateConfig(config *AgentConfig) {
-	if config.MaxHistory > 0 {
-		a.config.MaxHistory = config.MaxHistory
+	if config.HistoryWindow > 0 {
+		a.config.HistoryWindow = config.HistoryWindow
 	}
 	if config.Temperature >= 0 {
 		a.config.Temperature = config.Temperature

@@ -33,15 +33,24 @@ func NewTestModel(response string) *TestModel {
 	}
 }
 
-func (m *TestModel) Generate(ctx runtime.Context, messages []schema.Message) (schema.Message, error) {
-	return schema.Message{
-		Role:      schema.RoleAssistant,
-		Content:   m.response,
-		Timestamp: time.Now(),
+func (m *TestModel) Generate(ctx runtime.Context, req *llm.Request) (*llm.Response, error) {
+	return &llm.Response{
+		Message: schema.Message{
+			Role:      schema.RoleAssistant,
+			Content:   m.response,
+			Timestamp: time.Now(),
+		},
+		Usage: llm.TokenUsage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+		},
+		FinishReason: "stop",
+		ModelInfo:    m.Info(),
 	}, nil
 }
 
-func (m *TestModel) GenerateStream(ctx runtime.Context, messages []schema.Message) (<-chan schema.StreamEvent, error) {
+func (m *TestModel) GenerateStream(ctx runtime.Context, req *llm.Request) (<-chan schema.StreamEvent, error) {
 	eventChan := make(chan schema.StreamEvent, 10)
 
 	go func() {

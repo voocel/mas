@@ -46,6 +46,13 @@ func WithMaxTokens(maxTokens int) Option {
 	}
 }
 
+// WithCapabilities sets the agent's capabilities.
+func WithCapabilities(capabilities *AgentCapabilities) Option {
+	return func(cfg *AgentConfig) {
+		cfg.Capabilities = capabilities
+	}
+}
+
 // WithPresetRole provides common role prompts without forcing users to craft them manually.
 func WithPresetRole(role string) Option {
 	rolePrompts := map[string]string{

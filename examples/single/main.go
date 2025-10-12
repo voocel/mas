@@ -21,9 +21,13 @@ func main() {
 
 	toolAgent := createToolAgent(model)
 
+	expertAgent := createExpertAgent(model)
+
 	demonstrateAgentConversation(basicAgent)
 
 	demonstrateToolUsage(toolAgent)
+
+	demonstrateExpertAnalysis(expertAgent)
 
 }
 
@@ -123,3 +127,25 @@ func demonstrateToolUsage(ag *agent.BaseAgent) {
 	}
 }
 
+func demonstrateExpertAnalysis(ag *agent.BaseAgent) {
+	ctx := runtime.NewContext(context.Background(), "demo", "expert_analysis")
+
+	message := schema.Message{
+		Role:    schema.RoleUser,
+		Content: "Analyze the trend of quarterly sales data: Q1: 100k, Q2: 120k, Q3: 110k, Q4: 140k",
+	}
+
+	response, err := ag.Execute(ctx, message)
+	if err != nil {
+		return
+	}
+
+	fmt.Printf("user: %s\n", message.Content)
+	fmt.Printf("AI %s: %s\n", ag.Name(), response.Content)
+
+	capabilities := ag.GetCapabilities()
+	if capabilities != nil {
+		fmt.Printf("   - Complexity Level: %d\n", capabilities.ComplexityLevel)
+		fmt.Printf("   - Expertise: %v\n", capabilities.Expertise)
+	}
+}

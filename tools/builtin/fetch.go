@@ -46,7 +46,7 @@ func NewFetchTool(maxBodySize int64) *FetchTool {
 	schema := tools.CreateToolSchema(
 		"Fetch and process content from URLs with format conversion support",
 		map[string]interface{}{
-			"url": tools.StringProperty("URL to fetch content from (must start with http:// or https://)"),
+			"url": tools.StringProperty("The URL to fetch content from"),
 			"format": map[string]interface{}{
 				"type":        "string",
 				"description": "Output format: text (plain text), markdown (converted from HTML), or html (raw HTML body)",

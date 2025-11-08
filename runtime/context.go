@@ -16,10 +16,11 @@ type Context interface {
 	TraceID() string
 	State() State
 	SetState(State)
-	AddEvent(schema.StreamEvent)
+	AddEvent(schema.StreamEvent) error
 	Events() <-chan schema.StreamEvent
 	Conversation() ConversationStore
 	Clone() Context
+	Close() error
 
 	SetStateValue(key string, value interface{})
 	GetStateValue(key string) interface{}
@@ -73,6 +74,8 @@ type masContext struct {
 	events       chan schema.StreamEvent
 	conversation ConversationStore
 	mu           sync.RWMutex
+	closeOnce    sync.Once
+	closed       bool
 }
 
 const defaultEventBuffer = 100
@@ -166,20 +169,40 @@ func (c *masContext) SetState(state State) {
 	c.state = state
 }
 
-func (c *masContext) AddEvent(event schema.StreamEvent) {
+func (c *masContext) AddEvent(event schema.StreamEvent) error {
+	c.mu.RLock()
+	if c.closed {
+		c.mu.RUnlock()
+		return schema.ErrContextCancelled
+	}
+	c.mu.RUnlock()
+
 	select {
 	case c.events <- event:
+		return nil
+	case <-c.Done():
+		return c.Err()
 	default:
-		select {
-		case <-c.events:
-		default:
-		}
-		c.events <- event
+		// Buffer is full, drop event and return error
+		return schema.NewValidationError("events", cap(c.events), "event buffer full, event dropped")
 	}
 }
 
 func (c *masContext) Events() <-chan schema.StreamEvent {
 	return c.events
+}
+
+func (c *masContext) Close() error {
+	var err error
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+
+		// Close the events channel to signal consumers
+		close(c.events)
+	})
+	return err
 }
 
 func (c *masContext) Conversation() ConversationStore {

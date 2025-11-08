@@ -73,8 +73,8 @@ func (e *Executor) Execute(ctx runtime.Context, toolCall schema.ToolCall) (schem
 		return schema.ToolResult{}, schema.NewToolError(toolCall.Name, "execute", schema.ErrToolNotFound)
 	}
 
-	// Emit tool call event
-	ctx.AddEvent(schema.NewToolCallEvent(toolCall, ""))
+	// Emit tool call event (ignore error as it's non-critical)
+	_ = ctx.AddEvent(schema.NewToolCallEvent(toolCall, ""))
 
 	var result json.RawMessage
 	var err error
@@ -98,13 +98,13 @@ func (e *Executor) Execute(ctx runtime.Context, toolCall schema.ToolCall) (schem
 		toolResult.Result = result
 	}
 
-	// Emit tool result event
-	ctx.AddEvent(schema.NewToolResultEvent(toolResult, ""))
+	// Emit tool result event (ignore error as it's non-critical)
+	_ = ctx.AddEvent(schema.NewToolResultEvent(toolResult, ""))
 
 	return toolResult, err
 }
 
-// ExecuteParallel runs multiple tools concurrently
+// ExecuteParallel runs multiple tools concurrently with timeout control
 func (e *Executor) ExecuteParallel(ctx runtime.Context, toolCalls []schema.ToolCall) ([]schema.ToolResult, error) {
 	if len(toolCalls) == 0 {
 		return []schema.ToolResult{}, nil
@@ -112,6 +112,7 @@ func (e *Executor) ExecuteParallel(ctx runtime.Context, toolCalls []schema.ToolC
 
 	results := make([]schema.ToolResult, len(toolCalls))
 	errChan := make(chan error, len(toolCalls))
+	doneChan := make(chan struct{})
 	var wg sync.WaitGroup
 	maxConcurrency := e.config.MaxConcurrency
 	if maxConcurrency <= 0 || maxConcurrency > len(toolCalls) {
@@ -119,13 +120,26 @@ func (e *Executor) ExecuteParallel(ctx runtime.Context, toolCalls []schema.ToolC
 	}
 	sem := make(chan struct{}, maxConcurrency)
 
+	// Launch all tool executions
 	for i, toolCall := range toolCalls {
 		wg.Add(1)
 		go func(idx int, tc schema.ToolCall) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 
+			// Acquire semaphore
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[idx] = schema.ToolResult{
+					ID:    tc.ID,
+					Error: ctx.Err().Error(),
+				}
+				errChan <- ctx.Err()
+				return
+			}
+
+			// Execute with context cancellation support
 			result, err := e.Execute(ctx, tc)
 			results[idx] = result
 
@@ -135,8 +149,22 @@ func (e *Executor) ExecuteParallel(ctx runtime.Context, toolCalls []schema.ToolC
 		}(i, toolCall)
 	}
 
-	wg.Wait()
-	close(errChan)
+	go func() {
+		wg.Wait()
+		close(doneChan)
+	}()
+
+	// Wait for completion or context cancellation
+	select {
+	case <-doneChan:
+		close(errChan)
+	case <-ctx.Done():
+		go func() {
+			wg.Wait()
+			close(errChan)
+		}()
+		return results, ctx.Err()
+	}
 
 	var errors []error
 	for err := range errChan {

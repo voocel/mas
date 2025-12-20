@@ -227,6 +227,9 @@ func (r *Runner) RunFromCheckpoint(ctx context.Context, ag *agent.Agent, checkpo
 
 	store := memory.NewBuffer(r.config.HistoryWindow)
 	for _, msg := range checkpoint.Messages {
+		if msg.Role == schema.RoleSystem {
+			continue
+		}
 		if err := store.Add(ctx, msg); err != nil {
 			return RunResult{}, err
 		}
@@ -469,12 +472,19 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 					}
 				}
 				if event.Type == schema.EventError {
+					r.config.Observer.OnLLMEnd(llmCtx, state, nil, event.Error)
+					runCancels(cancels)
+					endSpan(event.Error)
 					return
 				}
 			}
 
 			if finalMessage.Role == "" {
-				out <- schema.NewErrorEvent(fmt.Errorf("runner: missing final message"), ag.ID()).WithIDs(runID, stepID, llmSpanID)
+				err := fmt.Errorf("runner: missing final message")
+				r.config.Observer.OnLLMEnd(llmCtx, state, nil, err)
+				runCancels(cancels)
+				endSpan(err)
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
 				return
 			}
 

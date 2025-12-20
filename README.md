@@ -173,6 +173,7 @@ r := runner.New(runner.Config{
     Tracer:   observer.NewSimpleTimerTracer(os.Stdout),
 })
 ```
+Logs include `run_id`, `step_id`, and `span_id` for correlation.
 
 ## Structured Logs & Metrics
 

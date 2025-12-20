@@ -72,6 +72,48 @@ func TestCapabilityPolicy(t *testing.T) {
 	}
 }
 
+func TestToolAccessPolicyDenyByDefault(t *testing.T) {
+	ag := agent.New("a1", "a1", agent.WithTools(newCapTool()))
+	policy := NewToolAccessPolicy(nil, nil)
+
+	state := &runner.ToolState{
+		Agent: ag,
+		Call:  &schema.ToolCall{Name: "file_tool"},
+	}
+
+	if err := policy.BeforeTool(context.Background(), state); err == nil {
+		t.Fatalf("expected default deny error")
+	}
+}
+
+func TestToolAccessPolicyAllowByName(t *testing.T) {
+	ag := agent.New("a1", "a1", agent.WithTools(newCapTool()))
+	policy := NewToolAccessPolicy([]string{"file_tool"}, nil)
+
+	state := &runner.ToolState{
+		Agent: ag,
+		Call:  &schema.ToolCall{Name: "file_tool"},
+	}
+
+	if err := policy.BeforeTool(context.Background(), state); err != nil {
+		t.Fatalf("expected allow by name, got %v", err)
+	}
+}
+
+func TestToolAccessPolicyAllowByCapability(t *testing.T) {
+	ag := agent.New("a1", "a1", agent.WithTools(newCapTool()))
+	policy := NewToolAccessPolicy(nil, []tools.Capability{tools.CapabilityFile})
+
+	state := &runner.ToolState{
+		Agent: ag,
+		Call:  &schema.ToolCall{Name: "file_tool"},
+	}
+
+	if err := policy.BeforeTool(context.Background(), state); err != nil {
+		t.Fatalf("expected allow by capability, got %v", err)
+	}
+}
+
 func TestHITLInterruptLLM(t *testing.T) {
 	mw := &HITLMiddleware{
 		Approver: HITLFunc{

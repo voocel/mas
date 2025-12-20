@@ -30,6 +30,9 @@ func (o *JSONObserver) OnLLMStart(ctx context.Context, state *runner.State, req 
 		"agent_name": state.Agent.Name(),
 		"turn":       state.Turn,
 		"messages":   len(state.Messages),
+		"run_id":     state.RunID,
+		"step_id":    state.StepID,
+		"span_id":    state.SpanID,
 	})
 }
 
@@ -38,6 +41,9 @@ func (o *JSONObserver) OnLLMEnd(ctx context.Context, state *runner.State, resp *
 		"agent_id":   state.Agent.ID(),
 		"agent_name": state.Agent.Name(),
 		"turn":       state.Turn,
+		"run_id":     state.RunID,
+		"step_id":    state.StepID,
+		"span_id":    state.SpanID,
 	}
 	if err != nil {
 		fields["error"] = err.Error()
@@ -56,8 +62,11 @@ func (o *JSONObserver) OnToolCall(ctx context.Context, state *runner.ToolState) 
 		return
 	}
 	o.log("tool_call", map[string]interface{}{
-		"tool": state.Call.Name,
-		"id":   state.Call.ID,
+		"tool":    state.Call.Name,
+		"id":      state.Call.ID,
+		"run_id":  state.RunID,
+		"step_id": state.StepID,
+		"span_id": state.SpanID,
 	})
 }
 
@@ -66,7 +75,10 @@ func (o *JSONObserver) OnToolResult(ctx context.Context, state *runner.ToolState
 		return
 	}
 	fields := map[string]interface{}{
-		"id": state.Result.ID,
+		"id":      state.Result.ID,
+		"run_id":  state.RunID,
+		"step_id": state.StepID,
+		"span_id": state.SpanID,
 	}
 	if state.Result.Error != "" {
 		fields["error"] = state.Result.Error

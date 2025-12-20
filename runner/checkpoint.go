@@ -90,7 +90,12 @@ func cloneToolCalls(calls []schema.ToolCall) []schema.ToolCall {
 		return nil
 	}
 	out := make([]schema.ToolCall, len(calls))
-	copy(out, calls)
+	for i, call := range calls {
+		out[i] = call
+		if len(call.Args) > 0 {
+			out[i].Args = append([]byte(nil), call.Args...)
+		}
+	}
 	return out
 }
 
@@ -99,6 +104,11 @@ func cloneToolResults(results []schema.ToolResult) []schema.ToolResult {
 		return nil
 	}
 	out := make([]schema.ToolResult, len(results))
-	copy(out, results)
+	for i, result := range results {
+		out[i] = result
+		if len(result.Result) > 0 {
+			out[i].Result = append([]byte(nil), result.Result...)
+		}
+	}
 	return out
 }

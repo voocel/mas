@@ -22,6 +22,7 @@ type Config struct {
 	Observer       Observer
 	Tracer         Tracer
 	RunIDGenerator func() string
+	Checkpointer   Checkpointer
 	ResponseFormat *llm.ResponseFormat
 	MaxTurns       int
 	HistoryWindow  int
@@ -207,6 +208,53 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 		return RunResult{}, err
 	}
 
+	return r.runWithState(ctx, ag, input, runID, messages, 1, nil, nil)
+}
+
+func (r *Runner) RunFromCheckpoint(ctx context.Context, ag *agent.Agent, checkpoint *Checkpoint) (RunResult, error) {
+	if ag == nil {
+		return RunResult{}, fmt.Errorf("runner: agent is nil")
+	}
+	if r.config.Model == nil {
+		return RunResult{}, fmt.Errorf("runner: model is nil")
+	}
+	if checkpoint == nil {
+		return RunResult{}, fmt.Errorf("runner: checkpoint is nil")
+	}
+	if checkpoint.RunID == "" {
+		return RunResult{}, fmt.Errorf("runner: checkpoint run id is empty")
+	}
+
+	store := memory.NewBuffer(r.config.HistoryWindow)
+	for _, msg := range checkpoint.Messages {
+		if err := store.Add(ctx, msg); err != nil {
+			return RunResult{}, err
+		}
+	}
+
+	run := r.WithMemory(store)
+	return run.runWithState(
+		ctx,
+		ag,
+		checkpoint.Input,
+		checkpoint.RunID,
+		cloneMessages(checkpoint.Messages),
+		checkpoint.Turn+1,
+		cloneToolCalls(checkpoint.ToolCalls),
+		cloneToolResults(checkpoint.ToolResults),
+	)
+}
+
+func (r *Runner) runWithState(
+	ctx context.Context,
+	ag *agent.Agent,
+	input schema.Message,
+	runID schema.RunID,
+	messages []schema.Message,
+	startTurn int,
+	toolCalls []schema.ToolCall,
+	toolResults []schema.ToolResult,
+) (RunResult, error) {
 	registry := tools.NewRegistry()
 	for _, t := range ag.Tools() {
 		if err := registry.Register(t); err != nil {
@@ -214,11 +262,9 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 		}
 	}
 
-	var toolCalls []schema.ToolCall
-	var toolResults []schema.ToolResult
 	var lastUsage llm.TokenUsage
 
-	for turn := 1; turn <= r.config.MaxTurns; turn++ {
+	for turn := startTurn; turn <= r.config.MaxTurns; turn++ {
 		stepID := schema.StepID(fmt.Sprintf("%s.step.%d", runID, turn))
 		llmSpanID := schema.SpanID(fmt.Sprintf("%s.llm", stepID))
 		state := &State{
@@ -272,6 +318,9 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 		}
 
 		if !resp.Message.HasToolCalls() {
+			if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
+				return RunResult{}, err
+			}
 			return RunResult{
 				Message:     resp.Message,
 				Usage:       lastUsage,
@@ -294,9 +343,37 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 				return RunResult{}, err
 			}
 		}
+
+		if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
+			return RunResult{}, err
+		}
 	}
 
 	return RunResult{}, fmt.Errorf("runner: exceeded max turns %d", r.config.MaxTurns)
+}
+
+func (r *Runner) saveCheckpoint(
+	ctx context.Context,
+	runID schema.RunID,
+	turn int,
+	input schema.Message,
+	messages []schema.Message,
+	toolCalls []schema.ToolCall,
+	toolResults []schema.ToolResult,
+) error {
+	if r.config.Checkpointer == nil {
+		return nil
+	}
+	checkpoint := Checkpoint{
+		RunID:       runID,
+		Turn:        turn,
+		Input:       *input.Clone(),
+		Messages:    cloneMessages(messages),
+		ToolCalls:   cloneToolCalls(toolCalls),
+		ToolResults: cloneToolResults(toolResults),
+		UpdatedAt:   time.Now(),
+	}
+	return r.config.Checkpointer.Save(ctx, checkpoint)
 }
 
 // RunStream executes with streaming events.
@@ -325,6 +402,9 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 			out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, "", "")
 			return
 		}
+
+		var toolCalls []schema.ToolCall
+		var toolResults []schema.ToolResult
 
 		registry := tools.NewRegistry()
 		for _, t := range ag.Tools() {
@@ -417,31 +497,41 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 			}
 
 			if !finalMessage.HasToolCalls() {
+				if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
+					out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
+				}
 				return
 			}
 
+			toolCalls = append(toolCalls, finalMessage.ToolCalls...)
 			for i, call := range finalMessage.ToolCalls {
 				spanID := schema.SpanID(fmt.Sprintf("%s.tool.%d", stepID, i))
 				out <- schema.NewToolCallEvent(call, ag.ID()).WithIDs(runID, stepID, spanID)
 			}
 
-			toolMessages, toolResults, err := r.executeTools(ctx, registry, ag, finalMessage.ToolCalls, runID, stepID)
+			toolMessages, results, err := r.executeTools(ctx, registry, ag, finalMessage.ToolCalls, runID, stepID)
 			if err != nil {
 				r.config.Observer.OnError(ctx, err)
 				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, "")
 				return
 			}
+			toolResults = append(toolResults, results...)
 
 			for i, toolMsg := range toolMessages {
-				if i < len(toolResults) {
+				if i < len(results) {
 					spanID := schema.SpanID(fmt.Sprintf("%s.tool.%d", stepID, i))
-					out <- schema.NewToolResultEvent(toolResults[i], ag.ID()).WithIDs(runID, stepID, spanID)
+					out <- schema.NewToolResultEvent(results[i], ag.ID()).WithIDs(runID, stepID, spanID)
 				}
 				messages = append(messages, toolMsg)
 				if err := r.config.Memory.Add(ctx, toolMsg); err != nil {
 					out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, "")
 					return
 				}
+			}
+
+			if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, "")
+				return
 			}
 		}
 

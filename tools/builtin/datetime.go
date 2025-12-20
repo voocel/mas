@@ -1,22 +1,22 @@
 package builtin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
 
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 	"github.com/voocel/mas/tools"
 )
 
-// DateTimeTool offers time and date utilities
+// DateTimeTool provides date and time operations.
 type DateTimeTool struct {
 	*tools.BaseTool
 }
 
-// DateTimeInput captures time-related parameters
+// DateTimeInput defines parameters.
 type DateTimeInput struct {
 	Action   string `json:"action" description:"Action type: now, format, parse, add, diff, timezone"`
 	DateTime string `json:"datetime,omitempty" description:"Datetime string"`
@@ -27,7 +27,7 @@ type DateTimeInput struct {
 	Target   string `json:"target,omitempty" description:"Target datetime (used to compute differences)"`
 }
 
-// DateTimeOutput describes the tool result
+// DateTimeOutput defines response output.
 type DateTimeOutput struct {
 	Success   bool   `json:"success"`
 	Result    string `json:"result,omitempty"`
@@ -37,7 +37,7 @@ type DateTimeOutput struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// NewDateTimeTool constructs the datetime tool
+// NewDateTimeTool creates a date-time tool.
 func NewDateTimeTool() *DateTimeTool {
 	schema := tools.CreateToolSchema(
 		"Datetime tool supporting now, formatting, parsing, and arithmetic operations",
@@ -60,8 +60,8 @@ func NewDateTimeTool() *DateTimeTool {
 	}
 }
 
-// Execute performs the requested datetime operation
-func (t *DateTimeTool) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
+// Execute performs time-related operations.
+func (t *DateTimeTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var dtInput DateTimeInput
 	if err := json.Unmarshal(input, &dtInput); err != nil {
 		return nil, schema.NewToolError(t.Name(), "parse_input", err)
@@ -89,7 +89,7 @@ func (t *DateTimeTool) Execute(ctx runtime.Context, input json.RawMessage) (json
 	}
 }
 
-// getCurrentTime returns the current time
+// getCurrentTime returns the current time.
 func (t *DateTimeTool) getCurrentTime(timezone, format string) (json.RawMessage, error) {
 	now := time.Now()
 
@@ -106,7 +106,6 @@ func (t *DateTimeTool) getCurrentTime(timezone, format string) (json.RawMessage,
 		now = now.In(loc)
 	}
 
-	// Format the time
 	result := now.Format(time.RFC3339)
 	if format != "" {
 		result = now.Format(t.parseFormat(format))
@@ -122,7 +121,7 @@ func (t *DateTimeTool) getCurrentTime(timezone, format string) (json.RawMessage,
 	return json.Marshal(output)
 }
 
-// formatTime formats a datetime
+// formatTime formats time.
 func (t *DateTimeTool) formatTime(datetime, format, timezone string) (json.RawMessage, error) {
 	if datetime == "" {
 		output := DateTimeOutput{
@@ -132,7 +131,6 @@ func (t *DateTimeTool) formatTime(datetime, format, timezone string) (json.RawMe
 		return json.Marshal(output)
 	}
 
-	// Parse the datetime
 	parsedTime, err := t.parseTimeString(datetime)
 	if err != nil {
 		output := DateTimeOutput{
@@ -142,7 +140,6 @@ func (t *DateTimeTool) formatTime(datetime, format, timezone string) (json.RawMe
 		return json.Marshal(output)
 	}
 
-	// Apply timezone
 	if timezone != "" {
 		loc, err := time.LoadLocation(timezone)
 		if err != nil {
@@ -155,7 +152,6 @@ func (t *DateTimeTool) formatTime(datetime, format, timezone string) (json.RawMe
 		parsedTime = parsedTime.In(loc)
 	}
 
-	// Format the datetime
 	result := parsedTime.Format(time.RFC3339)
 	if format != "" {
 		result = parsedTime.Format(t.parseFormat(format))
@@ -171,7 +167,7 @@ func (t *DateTimeTool) formatTime(datetime, format, timezone string) (json.RawMe
 	return json.Marshal(output)
 }
 
-// parseTime parses the datetime string
+// parseTime parses a time string.
 func (t *DateTimeTool) parseTime(datetime, format, timezone string) (json.RawMessage, error) {
 	if datetime == "" {
 		output := DateTimeOutput{
@@ -198,7 +194,6 @@ func (t *DateTimeTool) parseTime(datetime, format, timezone string) (json.RawMes
 		return json.Marshal(output)
 	}
 
-	// Apply timezone
 	if timezone != "" {
 		loc, err := time.LoadLocation(timezone)
 		if err != nil {
@@ -221,7 +216,7 @@ func (t *DateTimeTool) parseTime(datetime, format, timezone string) (json.RawMes
 	return json.Marshal(output)
 }
 
-// addTime performs time arithmetic
+// addTime adds or subtracts time.
 func (t *DateTimeTool) addTime(datetime string, amount int, unit, timezone string) (json.RawMessage, error) {
 	if datetime == "" {
 		output := DateTimeOutput{
@@ -231,7 +226,6 @@ func (t *DateTimeTool) addTime(datetime string, amount int, unit, timezone strin
 		return json.Marshal(output)
 	}
 
-	// Parse the datetime
 	parsedTime, err := t.parseTimeString(datetime)
 	if err != nil {
 		output := DateTimeOutput{
@@ -241,7 +235,6 @@ func (t *DateTimeTool) addTime(datetime string, amount int, unit, timezone strin
 		return json.Marshal(output)
 	}
 
-	// Add the duration
 	var result time.Time
 	switch unit {
 	case "year":
@@ -264,7 +257,6 @@ func (t *DateTimeTool) addTime(datetime string, amount int, unit, timezone strin
 		return json.Marshal(output)
 	}
 
-	// Apply timezone
 	if timezone != "" {
 		loc, err := time.LoadLocation(timezone)
 		if err != nil {
@@ -287,7 +279,7 @@ func (t *DateTimeTool) addTime(datetime string, amount int, unit, timezone strin
 	return json.Marshal(output)
 }
 
-// diffTime calculates the difference between datetimes
+// diffTime calculates time difference.
 func (t *DateTimeTool) diffTime(datetime, target, unit string) (json.RawMessage, error) {
 	if datetime == "" || target == "" {
 		output := DateTimeOutput{
@@ -297,7 +289,6 @@ func (t *DateTimeTool) diffTime(datetime, target, unit string) (json.RawMessage,
 		return json.Marshal(output)
 	}
 
-	// Parse the datetime
 	time1, err := t.parseTimeString(datetime)
 	if err != nil {
 		output := DateTimeOutput{
@@ -316,7 +307,6 @@ func (t *DateTimeTool) diffTime(datetime, target, unit string) (json.RawMessage,
 		return json.Marshal(output)
 	}
 
-	// Compute the difference
 	diff := time2.Sub(time1)
 	var result string
 
@@ -341,7 +331,7 @@ func (t *DateTimeTool) diffTime(datetime, target, unit string) (json.RawMessage,
 	return json.Marshal(output)
 }
 
-// convertTimezone converts the timezone
+// convertTimezone converts time zones.
 func (t *DateTimeTool) convertTimezone(datetime, timezone string) (json.RawMessage, error) {
 	if datetime == "" || timezone == "" {
 		output := DateTimeOutput{
@@ -351,7 +341,6 @@ func (t *DateTimeTool) convertTimezone(datetime, timezone string) (json.RawMessa
 		return json.Marshal(output)
 	}
 
-	// Parse the datetime
 	parsedTime, err := t.parseTimeString(datetime)
 	if err != nil {
 		output := DateTimeOutput{
@@ -361,7 +350,6 @@ func (t *DateTimeTool) convertTimezone(datetime, timezone string) (json.RawMessa
 		return json.Marshal(output)
 	}
 
-	// Convert timezone
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		output := DateTimeOutput{
@@ -383,14 +371,12 @@ func (t *DateTimeTool) convertTimezone(datetime, timezone string) (json.RawMessa
 	return json.Marshal(output)
 }
 
-// parseTimeString parses a datetime string using multiple layouts
+// parseTimeString parses time using multiple formats.
 func (t *DateTimeTool) parseTimeString(datetime string) (time.Time, error) {
-	// Try parsing as a timestamp
 	if timestamp, err := strconv.ParseInt(datetime, 10, 64); err == nil {
 		return time.Unix(timestamp, 0), nil
 	}
 
-	// Try common layouts
 	formats := []string{
 		time.RFC3339,
 		time.RFC3339Nano,
@@ -411,9 +397,8 @@ func (t *DateTimeTool) parseTimeString(datetime string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unable to parse datetime: %s", datetime)
 }
 
-// parseFormat interprets the provided layout
+// parseFormat parses custom formats.
 func (t *DateTimeTool) parseFormat(format string) string {
-	// Support several common format aliases
 	switch format {
 	case "iso":
 		return time.RFC3339
@@ -428,8 +413,8 @@ func (t *DateTimeTool) parseFormat(format string) string {
 	}
 }
 
-// ExecuteAsync performs the datetime operation asynchronously
-func (t *DateTimeTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
+// ExecuteAsync executes time operations asynchronously.
+func (t *DateTimeTool) ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
 	resultChan := make(chan tools.ToolResult, 1)
 
 	go func() {

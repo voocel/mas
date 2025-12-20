@@ -6,37 +6,40 @@ import (
 )
 
 var (
-	// Agent related errors
+	// Agent-related errors
 	ErrAgentNotFound        = errors.New("agent not found")
 	ErrAgentNotSupported    = errors.New("agent not supported")
 	ErrAgentAlreadyExists   = errors.New("agent already exists")
 	ErrAgentExecutionFailed = errors.New("agent execution failed")
 
-	// Tool related errors
+	// Tool-related errors
 	ErrToolNotFound         = errors.New("tool not found")
 	ErrToolAlreadyExists    = errors.New("tool already exists")
 	ErrToolExecutionFailed  = errors.New("tool execution failed")
 	ErrToolTimeout          = errors.New("tool execution timeout")
 	ErrToolSandboxViolation = errors.New("tool sandbox violation")
 
-	// LLM related errors
+	// LLM-related errors
 	ErrModelNotSupported = errors.New("model not supported")
 	ErrModelAPIError     = errors.New("model API error")
 	ErrModelRateLimit    = errors.New("model rate limit exceeded")
 
-	// Workflow related errors
+	// Workflow-related errors (legacy)
 	ErrWorkflowNotFound         = errors.New("workflow not found")
 	ErrWorkflowCyclicDependency = errors.New("workflow has cyclic dependency")
 	ErrWorkflowNodeNotFound     = errors.New("workflow node not found")
 
-	// Storage related errors
+	// Storage-related errors
 	ErrStorageNotFound  = errors.New("storage item not found")
 	ErrStorageCorrupted = errors.New("storage data corrupted")
 
-	// Generic errors
+	// Common errors
 	ErrInvalidInput     = errors.New("invalid input")
 	ErrTimeout          = errors.New("operation timeout")
 	ErrContextCancelled = errors.New("context cancelled")
+
+	// Runner-related errors
+	ErrRunnerExecutionFailed = errors.New("runner execution failed")
 )
 
 type AgentError struct {
@@ -87,6 +90,25 @@ type ModelError struct {
 	Model string
 	Op    string
 	Err   error
+}
+
+// RunnerError describes runtime failures in Runner.
+type RunnerError struct {
+	Op  string
+	Err error
+}
+
+func (e *RunnerError) Error() string {
+	return fmt.Sprintf("runner: %s: %v", e.Op, e.Err)
+}
+
+func (e *RunnerError) Unwrap() error {
+	return e.Err
+}
+
+// NewRunnerError creates a RunnerError.
+func NewRunnerError(op string, err error) *RunnerError {
+	return &RunnerError{Op: op, Err: err}
 }
 
 func (e *ModelError) Error() string {

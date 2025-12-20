@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Role defines the message role type
+// Role defines message roles.
 type Role string
 
 const (
@@ -15,7 +15,7 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Message represents a message exchanged between agents
+// Message represents a chat message.
 type Message struct {
 	ID        string                 `json:"id"`
 	Role      Role                   `json:"role"`
@@ -25,21 +25,21 @@ type Message struct {
 	Timestamp time.Time              `json:"timestamp"`
 }
 
-// ToolCall represents a tool invocation request
+// ToolCall represents a tool invocation request.
 type ToolCall struct {
 	ID   string          `json:"id"`
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args"`
 }
 
-// ToolResult represents the result of a tool execution
+// ToolResult represents a tool execution result.
 type ToolResult struct {
 	ID     string          `json:"id"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
 }
 
-// Reset clears the message so it can be reused from a pool
+// Reset clears the message fields.
 func (m *Message) Reset() {
 	m.ID = ""
 	m.Role = ""
@@ -49,7 +49,7 @@ func (m *Message) Reset() {
 	m.Timestamp = time.Time{}
 }
 
-// Clone creates a deep copy of the message
+// Clone deep-copies the message.
 func (m *Message) Clone() *Message {
 	clone := &Message{
 		ID:        m.ID,
@@ -58,13 +58,13 @@ func (m *Message) Clone() *Message {
 		Timestamp: m.Timestamp,
 	}
 	
-	// Deep copy tool calls
+	// Deep-copy tool calls.
 	if len(m.ToolCalls) > 0 {
 		clone.ToolCalls = make([]ToolCall, len(m.ToolCalls))
 		copy(clone.ToolCalls, m.ToolCalls)
 	}
 	
-	// Deep copy metadata
+	// Deep-copy metadata.
 	if m.Metadata != nil {
 		clone.Metadata = make(map[string]interface{})
 		for k, v := range m.Metadata {
@@ -75,17 +75,17 @@ func (m *Message) Clone() *Message {
 	return clone
 }
 
-// HasToolCalls checks whether the message contains tool calls
+// HasToolCalls reports whether tool calls are present.
 func (m *Message) HasToolCalls() bool {
 	return len(m.ToolCalls) > 0
 }
 
-// AddToolCall appends a tool call
+// AddToolCall appends a tool call.
 func (m *Message) AddToolCall(toolCall ToolCall) {
 	m.ToolCalls = append(m.ToolCalls, toolCall)
 }
 
-// SetMetadata sets a metadata entry
+// SetMetadata sets metadata.
 func (m *Message) SetMetadata(key string, value interface{}) {
 	if m.Metadata == nil {
 		m.Metadata = make(map[string]interface{})
@@ -93,7 +93,7 @@ func (m *Message) SetMetadata(key string, value interface{}) {
 	m.Metadata[key] = value
 }
 
-// GetMetadata looks up a metadata entry
+// GetMetadata retrieves metadata.
 func (m *Message) GetMetadata(key string) (interface{}, bool) {
 	if m.Metadata == nil {
 		return nil, false

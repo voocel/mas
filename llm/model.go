@@ -1,20 +1,21 @@
 package llm
 
 import (
-	"github.com/voocel/mas/runtime"
+	"context"
+
 	"github.com/voocel/mas/schema"
 )
 
-// ChatModel is the unified model interface that accepts explicit requests and returns unified responses
+// ChatModel is the unified model interface for requests and responses.
 type ChatModel interface {
-	Generate(ctx runtime.Context, req *Request) (*Response, error)
-	GenerateStream(ctx runtime.Context, req *Request) (<-chan schema.StreamEvent, error)
+	Generate(ctx context.Context, req *Request) (*Response, error)
+	GenerateStream(ctx context.Context, req *Request) (<-chan schema.StreamEvent, error)
 	SupportsTools() bool
 	SupportsStreaming() bool
 	Info() ModelInfo
 }
 
-// Request encapsulates a single generation request
+// Request describes a generation request.
 type Request struct {
 	Messages       []schema.Message       `json:"messages"`
 	Config         *GenerationConfig      `json:"config,omitempty"`
@@ -24,7 +25,7 @@ type Request struct {
 	Extra          map[string]interface{} `json:"extra,omitempty"`
 }
 
-// Response encapsulates model output and metadata
+// Response describes model output and metadata.
 type Response struct {
 	Message      schema.Message `json:"message"`
 	Usage        TokenUsage     `json:"usage"`
@@ -32,28 +33,28 @@ type Response struct {
 	ModelInfo    ModelInfo      `json:"model_info"`
 }
 
-// ToolSpec describes a functional tool that can be called by the model
+// ToolSpec describes a tool callable by the model.
 type ToolSpec struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Parameters  interface{} `json:"parameters"`
 }
 
-// ToolChoiceOption describes the tool selection strategy
-// Type: auto/none/required/function; when set to function, use Name to specify the function name
+// ToolChoiceOption describes tool selection strategy.
+// Type: auto/none/required/function; when function, Name specifies the function name.
 type ToolChoiceOption struct {
 	Type string `json:"type"`
 	Name string `json:"name,omitempty"`
 }
 
-// ResponseFormat structured output format (aligned with litellm)
+// ResponseFormat defines structured output format (aligned with litellm).
 type ResponseFormat struct {
 	Type       string      `json:"type"` // text, json_object, json_schema
 	JSONSchema interface{} `json:"json_schema,omitempty"`
 	Strict     *bool       `json:"strict,omitempty"`
 }
 
-// ModelInfo basic model information
+// ModelInfo contains basic model metadata.
 type ModelInfo struct {
 	Name         string   `json:"name"`
 	Provider     string   `json:"provider"`
@@ -63,7 +64,7 @@ type ModelInfo struct {
 	Capabilities []string `json:"capabilities"`
 }
 
-// ModelCapability capability identifier
+// ModelCapability defines capability identifiers.
 type ModelCapability string
 
 const (
@@ -75,7 +76,7 @@ const (
 	CapabilityFunctionCall ModelCapability = "function_call"
 )
 
-// GenerationConfig sampling and length control
+// GenerationConfig defines sampling and length control parameters.
 type GenerationConfig struct {
 	Temperature      float64  `json:"temperature"`
 	TopP             float64  `json:"top_p"`
@@ -98,7 +99,7 @@ var DefaultGenerationConfig = &GenerationConfig{
 	Seed:             nil,
 }
 
-// BaseModel provides common implementation
+// BaseModel provides a common implementation.
 type BaseModel struct {
 	info   ModelInfo
 	config *GenerationConfig
@@ -128,7 +129,7 @@ func (m *BaseModel) SupportsTools() bool {
 }
 func (m *BaseModel) SupportsStreaming() bool { return m.SupportsCapability(CapabilityStreaming) }
 
-// TokenUsage statistics
+// TokenUsage is token usage statistics.
 type TokenUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`

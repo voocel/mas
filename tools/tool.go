@@ -1,25 +1,35 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
 
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 )
 
-// Tool defines the tool interface
+// Tool defines the tool interface.
 type Tool interface {
 	Name() string
 	Description() string
 	Schema() *ToolSchema
-	Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error)
-	ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan ToolResult, error)
+	Capabilities() []Capability
+	Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
+	ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan ToolResult, error)
 }
 
-// ToolSchema describes the tool JSON schema
+// Capability defines tool side effects.
+type Capability string
+
+const (
+	CapabilityNetwork Capability = "network"
+	CapabilityFile    Capability = "file"
+	CapabilityUnsafe  Capability = "unsafe"
+)
+
+// ToolSchema describes a tool JSON schema.
 type ToolSchema struct {
 	Type        string                 `json:"type"`
 	Properties  map[string]interface{} `json:"properties"`
@@ -27,36 +37,37 @@ type ToolSchema struct {
 	Description string                 `json:"description"`
 }
 
-// ToolResult represents the outcome of a tool
+// ToolResult represents a tool execution result.
 type ToolResult struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data,omitempty"`
 	Error   string          `json:"error,omitempty"`
 }
 
-// ToolConfig configures tool execution
+// ToolConfig configures tool execution.
 type ToolConfig struct {
 	Timeout    time.Duration `json:"timeout"`
 	MaxRetries int           `json:"max_retries"`
 	Sandbox    bool          `json:"sandbox"`
 }
 
-// DefaultToolConfig provides baseline configuration
+// DefaultToolConfig provides default configuration.
 var DefaultToolConfig = &ToolConfig{
 	Timeout:    30 * time.Second,
 	MaxRetries: 3,
 	Sandbox:    true,
 }
 
-// BaseTool provides shared tool functionality
+// BaseTool provides shared tool functionality.
 type BaseTool struct {
 	name        string
 	description string
 	schema      *ToolSchema
 	config      *ToolConfig
+	caps        []Capability
 }
 
-// NewBaseTool constructs a base tool
+// NewBaseTool creates a base tool.
 func NewBaseTool(name, description string, schema *ToolSchema) *BaseTool {
 	return &BaseTool{
 		name:        name,
@@ -78,6 +89,10 @@ func (t *BaseTool) Schema() *ToolSchema {
 	return t.schema
 }
 
+func (t *BaseTool) Capabilities() []Capability {
+	return append([]Capability(nil), t.caps...)
+}
+
 func (t *BaseTool) Config() *ToolConfig {
 	return t.config
 }
@@ -86,13 +101,13 @@ func (t *BaseTool) SetConfig(config *ToolConfig) {
 	t.config = config
 }
 
-// Execute is a placeholder that should be overridden
-func (t *BaseTool) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
+// Execute is a default implementation and should be overridden.
+func (t *BaseTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	return nil, schema.NewToolError(t.name, "execute", schema.ErrToolExecutionFailed)
 }
 
-// ExecuteAsync executes the tool asynchronously
-func (t *BaseTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan ToolResult, error) {
+// ExecuteAsync executes the tool asynchronously.
+func (t *BaseTool) ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan ToolResult, error) {
 	resultChan := make(chan ToolResult, 1)
 
 	go func() {
@@ -115,7 +130,13 @@ func (t *BaseTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-c
 	return resultChan, nil
 }
 
-// ValidateInput performs lightweight validation
+// WithCapabilities sets capability markers.
+func (t *BaseTool) WithCapabilities(caps ...Capability) *BaseTool {
+	t.caps = append([]Capability(nil), caps...)
+	return t
+}
+
+// ValidateInput performs lightweight validation.
 func (t *BaseTool) ValidateInput(input json.RawMessage) error {
 	if t.schema == nil {
 		return nil
@@ -137,7 +158,7 @@ func (t *BaseTool) ValidateInput(input json.RawMessage) error {
 	return nil
 }
 
-// CreateToolSchema builds a schema definition
+// CreateToolSchema builds a schema.
 func CreateToolSchema(description string, properties map[string]interface{}, required []string) *ToolSchema {
 	return &ToolSchema{
 		Type:        "object",
@@ -147,7 +168,7 @@ func CreateToolSchema(description string, properties map[string]interface{}, req
 	}
 }
 
-// StringProperty defines a string property
+// StringProperty defines a string property.
 func StringProperty(description string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":        "string",
@@ -155,7 +176,7 @@ func StringProperty(description string) map[string]interface{} {
 	}
 }
 
-// NumberProperty defines a numeric property
+// NumberProperty defines a numeric property.
 func NumberProperty(description string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":        "number",
@@ -163,7 +184,7 @@ func NumberProperty(description string) map[string]interface{} {
 	}
 }
 
-// BooleanProperty defines a boolean property
+// BooleanProperty defines a boolean property.
 func BooleanProperty(description string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":        "boolean",
@@ -171,7 +192,7 @@ func BooleanProperty(description string) map[string]interface{} {
 	}
 }
 
-// ArrayProperty defines an array property
+// ArrayProperty defines an array property.
 func ArrayProperty(description string, itemType string) map[string]interface{} {
 	return map[string]interface{}{
 		"type":        "array",
@@ -182,7 +203,7 @@ func ArrayProperty(description string, itemType string) map[string]interface{} {
 	}
 }
 
-// ObjectProperty defines an object property
+// ObjectProperty defines an object property.
 func ObjectProperty(description string, properties map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"type":        "object",
@@ -191,57 +212,47 @@ func ObjectProperty(description string, properties map[string]interface{}) map[s
 	}
 }
 
-// WithTimeout updates the timeout
+// WithTimeout sets a timeout.
 func WithTimeout(timeout time.Duration) func(*ToolConfig) {
 	return func(config *ToolConfig) {
 		config.Timeout = timeout
 	}
 }
 
-// WithMaxRetries updates the retry count
+// WithMaxRetries sets max retries.
 func WithMaxRetries(maxRetries int) func(*ToolConfig) {
 	return func(config *ToolConfig) {
 		config.MaxRetries = maxRetries
 	}
 }
 
-// WithSandbox toggles sandboxing
+// WithSandbox toggles sandboxing (reserved).
 func WithSandbox(sandbox bool) func(*ToolConfig) {
 	return func(config *ToolConfig) {
 		config.Sandbox = sandbox
 	}
 }
 
-// NewCalculator provides a convenience constructor
-func NewCalculator() Tool {
-	// Importing the builtin package here would introduce a cycle,
-	// so the actual implementation lives in builtin and we expose a stub here
-	// Return nil for now; builtin holds the concrete implementation
-	return nil
-}
-
-
-// ToolFunction Define the signature of the utility function
-// The function must be: func(ctx runtime.Context, ...args) (string, error)
+// ToolFunction defines a tool function signature.
+// The function must be: func(ctx context.Context, ...args) (string, error)
 type ToolFunction interface{}
 
-// FunctionTool Wrap a function as a Tool interface
+// FunctionTool wraps a function as a tool.
 type FunctionTool struct {
 	name        string
 	description string
 	fn          ToolFunction
 	schema      *ToolSchema
+	caps        []Capability
 }
 
-// NewFunctionTool Create Tool from Function
+// NewFunctionTool creates a tool from a function.
 func NewFunctionTool(name, description string, fn ToolFunction) (*FunctionTool, error) {
-	// Validate Function Signature
 	fnType := reflect.TypeOf(fn)
 	if fnType.Kind() != reflect.Func {
 		return nil, fmt.Errorf("tool must be a function")
 	}
 
-	// Validate Function Signature: func(runtime.Context, ...args) (string, error)
 	if fnType.NumOut() != 2 {
 		return nil, fmt.Errorf("function must return (string, error)")
 	}
@@ -254,11 +265,10 @@ func NewFunctionTool(name, description string, fn ToolFunction) (*FunctionTool, 
 		return nil, fmt.Errorf("function must return error as second value")
 	}
 
-	if fnType.NumIn() < 1 || fnType.In(0) != reflect.TypeOf((*runtime.Context)(nil)).Elem() {
-		return nil, fmt.Errorf("function must take runtime.Context as first parameter")
+	if fnType.NumIn() < 1 || fnType.In(0) != reflect.TypeOf((*context.Context)(nil)).Elem() {
+		return nil, fmt.Errorf("function must take context.Context as first parameter")
 	}
 
-	// Gen Schema
 	schema := generateSchemaFromFunction(fnType)
 
 	return &FunctionTool{
@@ -281,7 +291,11 @@ func (ft *FunctionTool) Schema() *ToolSchema {
 	return ft.schema
 }
 
-func (ft *FunctionTool) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
+func (ft *FunctionTool) Capabilities() []Capability {
+	return append([]Capability(nil), ft.caps...)
+}
+
+func (ft *FunctionTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	fnValue := reflect.ValueOf(ft.fn)
 	fnType := fnValue.Type()
 
@@ -327,7 +341,7 @@ func (ft *FunctionTool) Execute(ctx runtime.Context, input json.RawMessage) (jso
 	return json.Marshal(map[string]string{"result": result})
 }
 
-func (ft *FunctionTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan ToolResult, error) {
+func (ft *FunctionTool) ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan ToolResult, error) {
 	resultChan := make(chan ToolResult, 1)
 
 	go func() {
@@ -350,7 +364,13 @@ func (ft *FunctionTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage)
 	return resultChan, nil
 }
 
-// generateSchemaFromFunction Generate Schema from Function Signatures
+// WithCapabilities sets capability markers.
+func (ft *FunctionTool) WithCapabilities(caps ...Capability) *FunctionTool {
+	ft.caps = append([]Capability(nil), caps...)
+	return ft
+}
+
+// generateSchemaFromFunction builds a schema from a function signature.
 func generateSchemaFromFunction(fnType reflect.Type) *ToolSchema {
 	properties := make(map[string]interface{})
 	required := make([]string, 0)

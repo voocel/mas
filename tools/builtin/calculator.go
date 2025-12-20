@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -9,17 +10,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 	"github.com/voocel/mas/tools"
 )
 
-// Calculator evaluates arithmetic expressions
+// Calculator evaluates basic arithmetic expressions.
 type Calculator struct {
 	*tools.BaseTool
 }
 
-// NewCalculator constructs the calculator tool
+// NewCalculator creates a calculator tool.
 func NewCalculator() *Calculator {
 	schema := tools.CreateToolSchema(
 		"Perform basic mathematical calculations",
@@ -36,9 +36,8 @@ func NewCalculator() *Calculator {
 	}
 }
 
-// Execute evaluates the expression
-func (c *Calculator) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
-	// Parse input parameters
+// Execute evaluates the expression.
+func (c *Calculator) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Expression string `json:"expression"`
 	}
@@ -51,16 +50,13 @@ func (c *Calculator) Execute(ctx runtime.Context, input json.RawMessage) (json.R
 		return nil, schema.NewValidationError("expression", params.Expression, "expression cannot be empty")
 	}
 	
-	// Normalize the expression
 	expression := strings.TrimSpace(params.Expression)
-	
-	// Evaluate the expression
+
 	result, err := c.evaluate(expression)
 	if err != nil {
 		return nil, schema.NewToolError(c.Name(), "evaluate", err)
 	}
-	
-	// Return the result
+
 	response := map[string]interface{}{
 		"expression": expression,
 		"result":     result,
@@ -69,9 +65,8 @@ func (c *Calculator) Execute(ctx runtime.Context, input json.RawMessage) (json.R
 	return json.Marshal(response)
 }
 
-// evaluate evaluates an expression
+// evaluate computes the expression.
 func (c *Calculator) evaluate(expr string) (float64, error) {
-	// Use Go's AST parser to evaluate the expression safely
 	node, err := parser.ParseExpr(expr)
 	if err != nil {
 		return 0, fmt.Errorf("invalid expression: %v", err)
@@ -80,7 +75,7 @@ func (c *Calculator) evaluate(expr string) (float64, error) {
 	return c.evalNode(node)
 }
 
-// evalNode recursively evaluates AST nodes
+// evalNode recursively evaluates an AST node.
 func (c *Calculator) evalNode(node ast.Node) (float64, error) {
 	switch n := node.(type) {
 	case *ast.BasicLit:
@@ -96,7 +91,7 @@ func (c *Calculator) evalNode(node ast.Node) (float64, error) {
 	}
 }
 
-// evalBasicLit evaluates literals
+// evalBasicLit evaluates a literal.
 func (c *Calculator) evalBasicLit(lit *ast.BasicLit) (float64, error) {
 	switch lit.Kind {
 	case token.INT:
@@ -116,7 +111,7 @@ func (c *Calculator) evalBasicLit(lit *ast.BasicLit) (float64, error) {
 	}
 }
 
-// evalBinaryExpr evaluates binary expressions
+// evalBinaryExpr evaluates a binary expression.
 func (c *Calculator) evalBinaryExpr(expr *ast.BinaryExpr) (float64, error) {
 	left, err := c.evalNode(expr.X)
 	if err != nil {
@@ -150,7 +145,7 @@ func (c *Calculator) evalBinaryExpr(expr *ast.BinaryExpr) (float64, error) {
 	}
 }
 
-// evalUnaryExpr evaluates unary expressions
+// evalUnaryExpr evaluates a unary expression.
 func (c *Calculator) evalUnaryExpr(expr *ast.UnaryExpr) (float64, error) {
 	operand, err := c.evalNode(expr.X)
 	if err != nil {
@@ -167,7 +162,7 @@ func (c *Calculator) evalUnaryExpr(expr *ast.UnaryExpr) (float64, error) {
 	}
 }
 
-// GetSupportedOperations lists supported operations
+// GetSupportedOperations returns supported operations.
 func (c *Calculator) GetSupportedOperations() []string {
 	return []string{
 		"Addition (+)",
@@ -180,14 +175,12 @@ func (c *Calculator) GetSupportedOperations() []string {
 	}
 }
 
-// ValidateExpression ensures the expression is safe
+// ValidateExpression validates expression safety.
 func (c *Calculator) ValidateExpression(expr string) error {
-	// Enforce expression length limits
 	if len(expr) > 1000 {
 		return fmt.Errorf("expression too long (max 1000 characters)")
 	}
-	
-	// Check for unsafe keywords
+
 	unsafeChars := []string{"import", "func", "var", "const", "package", "go", "chan", "select"}
 	lowerExpr := strings.ToLower(expr)
 	
@@ -197,7 +190,6 @@ func (c *Calculator) ValidateExpression(expr string) error {
 		}
 	}
 	
-	// Attempt to parse the expression
 	_, err := parser.ParseExpr(expr)
 	if err != nil {
 		return fmt.Errorf("invalid expression syntax: %v", err)
@@ -206,7 +198,7 @@ func (c *Calculator) ValidateExpression(expr string) error {
 	return nil
 }
 
-// Examples returns usage samples
+// Examples returns examples.
 func (c *Calculator) Examples() []map[string]interface{} {
 	return []map[string]interface{}{
 		{

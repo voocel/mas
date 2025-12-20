@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,12 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 	"github.com/voocel/mas/tools"
 )
 
-// WebSearchTool performs web searches
+// WebSearchTool performs web searches.
 type WebSearchTool struct {
 	*tools.BaseTool
 	apiKey         string
@@ -24,14 +24,14 @@ type WebSearchTool struct {
 	provider       string
 }
 
-// SearchInput describes search parameters
+// SearchInput defines search parameters.
 type SearchInput struct {
 	Query      string `json:"query" description:"Search query"`
 	MaxResults int    `json:"max_results,omitempty" description:"Maximum number of results (default 10)"`
 	Language   string `json:"language,omitempty" description:"Language code (e.g., zh-CN, en)"`
 }
 
-// SearchResult captures a single search hit
+// SearchResult defines a single search result.
 type SearchResult struct {
 	Title   string `json:"title"`
 	URL     string `json:"url"`
@@ -39,7 +39,7 @@ type SearchResult struct {
 	Source  string `json:"source,omitempty"`
 }
 
-// SearchOutput wraps the search response
+// SearchOutput defines the search response.
 type SearchOutput struct {
 	Success bool           `json:"success"`
 	Query   string         `json:"query"`
@@ -49,7 +49,7 @@ type SearchOutput struct {
 	Error   string         `json:"error,omitempty"`
 }
 
-// NewWebSearchTool constructs a web search tool
+// NewWebSearchTool creates a search tool.
 func NewWebSearchTool(apiKey string) *WebSearchTool {
 	schema := tools.CreateToolSchema(
 		"Web search tool for retrieving information from the internet",
@@ -61,19 +61,20 @@ func NewWebSearchTool(apiKey string) *WebSearchTool {
 		[]string{"query"},
 	)
 
-	baseTool := tools.NewBaseTool("web_search", "Web search tool for retrieving information from the internet", schema)
+	baseTool := tools.NewBaseTool("web_search", "Web search tool for retrieving information from the internet", schema).
+		WithCapabilities(tools.CapabilityNetwork)
 
 	return &WebSearchTool{
 		BaseTool:  baseTool,
 		apiKey:    apiKey,
-		searchURL: "https://api.duckduckgo.com/", // Use DuckDuckGo as the default search engine
+		searchURL: "https://api.duckduckgo.com/", // Default: DuckDuckGo.
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
-// NewGoogleSearchTool constructs a Google search tool
+// NewGoogleSearchTool creates a Google search tool.
 func NewGoogleSearchTool(apiKey, searchEngineID string) *WebSearchTool {
 	tool := NewWebSearchTool(apiKey)
 	tool.searchURL = "https://www.googleapis.com/customsearch/v1"
@@ -82,8 +83,8 @@ func NewGoogleSearchTool(apiKey, searchEngineID string) *WebSearchTool {
 	return tool
 }
 
-// Execute performs a search
-func (t *WebSearchTool) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
+// Execute performs a search.
+func (t *WebSearchTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var searchInput SearchInput
 	if err := json.Unmarshal(input, &searchInput); err != nil {
 		return nil, schema.NewToolError(t.Name(), "parse_input", err)
@@ -101,21 +102,19 @@ func (t *WebSearchTool) Execute(ctx runtime.Context, input json.RawMessage) (jso
 		searchInput.MaxResults = 10
 	}
 	if searchInput.MaxResults > 50 {
-		searchInput.MaxResults = 50 // Cap the maximum number of results
+		searchInput.MaxResults = 50 // Max results.
 	}
 
-	// Select the search provider based on configuration
 	switch t.provider {
 	case "google":
-		return t.searchGoogle(searchInput)
+		return t.searchGoogle(ctx, searchInput)
 	default:
-		return t.searchDuckDuckGo(searchInput)
+		return t.searchDuckDuckGo(ctx, searchInput)
 	}
 }
 
-// searchDuckDuckGo queries DuckDuckGo
-func (t *WebSearchTool) searchDuckDuckGo(input SearchInput) (json.RawMessage, error) {
-	// DuckDuckGo Instant Answer API
+// searchDuckDuckGo calls DuckDuckGo.
+func (t *WebSearchTool) searchDuckDuckGo(ctx context.Context, input SearchInput) (json.RawMessage, error) {
 	params := url.Values{}
 	params.Set("q", input.Query)
 	params.Set("format", "json")
@@ -124,7 +123,17 @@ func (t *WebSearchTool) searchDuckDuckGo(input SearchInput) (json.RawMessage, er
 
 	searchURL := t.searchURL + "?" + params.Encode()
 
-	resp, err := t.client.Get(searchURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		output := SearchOutput{
+			Success: false,
+			Query:   input.Query,
+			Error:   fmt.Sprintf("failed to create request: %v", err),
+		}
+		return json.Marshal(output)
+	}
+
+	resp, err := t.client.Do(req)
 	if err != nil {
 		output := SearchOutput{
 			Success: false,
@@ -145,7 +154,6 @@ func (t *WebSearchTool) searchDuckDuckGo(input SearchInput) (json.RawMessage, er
 		return json.Marshal(output)
 	}
 
-	// Parse the DuckDuckGo response
 	var ddgResponse map[string]interface{}
 	if err := json.Unmarshal(body, &ddgResponse); err != nil {
 		output := SearchOutput{
@@ -169,8 +177,8 @@ func (t *WebSearchTool) searchDuckDuckGo(input SearchInput) (json.RawMessage, er
 	return json.Marshal(output)
 }
 
-// searchGoogle queries the Google Custom Search API
-func (t *WebSearchTool) searchGoogle(input SearchInput) (json.RawMessage, error) {
+// searchGoogle calls Google Custom Search API.
+func (t *WebSearchTool) searchGoogle(ctx context.Context, input SearchInput) (json.RawMessage, error) {
 	if t.apiKey == "" {
 		output := SearchOutput{
 			Success: false,
@@ -200,7 +208,17 @@ func (t *WebSearchTool) searchGoogle(input SearchInput) (json.RawMessage, error)
 
 	searchURL := t.searchURL + "?" + params.Encode()
 
-	resp, err := t.client.Get(searchURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		output := SearchOutput{
+			Success: false,
+			Query:   input.Query,
+			Error:   fmt.Sprintf("failed to create request: %v", err),
+		}
+		return json.Marshal(output)
+	}
+
+	resp, err := t.client.Do(req)
 	if err != nil {
 		output := SearchOutput{
 			Success: false,
@@ -221,7 +239,6 @@ func (t *WebSearchTool) searchGoogle(input SearchInput) (json.RawMessage, error)
 		return json.Marshal(output)
 	}
 
-	// Parse the Google response
 	var googleResponse map[string]interface{}
 	if err := json.Unmarshal(body, &googleResponse); err != nil {
 		output := SearchOutput{
@@ -245,11 +262,10 @@ func (t *WebSearchTool) searchGoogle(input SearchInput) (json.RawMessage, error)
 	return json.Marshal(output)
 }
 
-// parseDuckDuckGoResponse parses the DuckDuckGo response
+// parseDuckDuckGoResponse parses DuckDuckGo response.
 func (t *WebSearchTool) parseDuckDuckGoResponse(response map[string]interface{}, maxResults int) []SearchResult {
 	var results []SearchResult
 
-	// Parse the Abstract field
 	if abstract, ok := response["Abstract"].(string); ok && abstract != "" {
 		if abstractURL, ok := response["AbstractURL"].(string); ok {
 			results = append(results, SearchResult{
@@ -261,7 +277,6 @@ func (t *WebSearchTool) parseDuckDuckGoResponse(response map[string]interface{},
 		}
 	}
 
-	// Parse RelatedTopics
 	if relatedTopics, ok := response["RelatedTopics"].([]interface{}); ok {
 		for _, topic := range relatedTopics {
 			if topicMap, ok := topic.(map[string]interface{}); ok {
@@ -285,7 +300,7 @@ func (t *WebSearchTool) parseDuckDuckGoResponse(response map[string]interface{},
 	return results
 }
 
-// parseGoogleResponse parses the Google response
+// parseGoogleResponse parses Google response.
 func (t *WebSearchTool) parseGoogleResponse(response map[string]interface{}) []SearchResult {
 	var results []SearchResult
 
@@ -309,9 +324,8 @@ func (t *WebSearchTool) parseGoogleResponse(response map[string]interface{}) []S
 	return results
 }
 
-// extractTitle derives a title from the text
+// extractTitle extracts a title from text.
 func (t *WebSearchTool) extractTitle(text string) string {
-	// Simple heuristic: use the first sentence or first 50 characters
 	if len(text) > 50 {
 		if idx := strings.Index(text, "."); idx > 0 && idx < 50 {
 			return text[:idx]
@@ -321,8 +335,8 @@ func (t *WebSearchTool) extractTitle(text string) string {
 	return text
 }
 
-// ExecuteAsync performs the search asynchronously
-func (t *WebSearchTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
+// ExecuteAsync executes search asynchronously.
+func (t *WebSearchTool) ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
 	resultChan := make(chan tools.ToolResult, 1)
 
 	go func() {

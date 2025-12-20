@@ -4,11 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	masllm "github.com/voocel/mas/llm"
-	masmemory "github.com/voocel/mas/memory"
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 )
 
@@ -18,16 +15,16 @@ type Summarizer struct {
 	SummaryLength int
 }
 
-// NewSummarizer constructs an LLM-backed summarizer.
+// NewSummarizer creates an LLM-based summarizer.
 func NewSummarizer(model masllm.ChatModel) *Summarizer {
 	return &Summarizer{
 		Model:         model,
-		SystemPrompt:  "You are an assistant that distills user conversations into concise summaries.",
+		SystemPrompt:  "You are a summarization assistant. Compress the conversation into a concise summary.",
 		SummaryLength: 200,
 	}
 }
 
-// Summarize sends the conversation history to the model and returns the summary text.
+// Summarize sends conversation history to the model and returns a summary.
 func (s *Summarizer) Summarize(ctx context.Context, history []schema.Message) (string, error) {
 	if s == nil || s.Model == nil {
 		return "", fmt.Errorf("memory/llm: summarizer missing model")
@@ -39,8 +36,7 @@ func (s *Summarizer) Summarize(ctx context.Context, history []schema.Message) (s
 		{Role: schema.RoleUser, Content: prompt},
 	}
 
-	runtimeCtx := runtime.NewContext(ctx, "memory-summary", fmt.Sprintf("summary-%d", time.Now().UnixNano()))
-	resp, err := s.Model.Generate(runtimeCtx, &masllm.Request{Messages: messages})
+	resp, err := s.Model.Generate(ctx, &masllm.Request{Messages: messages})
 	if err != nil {
 		return "", err
 	}
@@ -49,7 +45,7 @@ func (s *Summarizer) Summarize(ctx context.Context, history []schema.Message) (s
 
 func buildSummaryPrompt(history []schema.Message, limit int) string {
 	var builder strings.Builder
-	builder.WriteString("Summarize the following conversation. Keep the summary under ")
+	builder.WriteString("Please summarize the following conversation. Keep the summary under ")
 	builder.WriteString(fmt.Sprintf("%d words.\n\n", limit))
 	for _, msg := range history {
 		if msg.Role == schema.RoleSystem {
@@ -68,4 +64,4 @@ func buildSummaryPrompt(history []schema.Message, limit int) string {
 	return builder.String()
 }
 
-var _ masmemory.Summarizer = (*Summarizer)(nil)
+// Summarizer provides lightweight LLM summarization.

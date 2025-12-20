@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,19 +9,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 	"github.com/voocel/mas/tools"
 )
 
-// HTTPClientTool issues HTTP requests
+// HTTPClientTool performs HTTP requests.
 type HTTPClientTool struct {
 	*tools.BaseTool
 	client      *http.Client
 	maxBodySize int64
 }
 
-// HTTPRequest contains HTTP request parameters
+// HTTPRequest defines request parameters.
 type HTTPRequest struct {
 	Method  string            `json:"method" description:"HTTP method: GET, POST, PUT, DELETE, etc."`
 	URL     string            `json:"url" description:"Request URL"`
@@ -29,7 +29,7 @@ type HTTPRequest struct {
 	Timeout int               `json:"timeout,omitempty" description:"Timeout in seconds (default 30)"`
 }
 
-// HTTPResponse represents an HTTP response
+// HTTPResponse defines response payload.
 type HTTPResponse struct {
 	Success    bool              `json:"success"`
 	StatusCode int               `json:"status_code"`
@@ -41,10 +41,10 @@ type HTTPResponse struct {
 	Error      string            `json:"error,omitempty"`
 }
 
-// NewHTTPClientTool constructs an HTTP client tool
+// NewHTTPClientTool creates an HTTP tool.
 func NewHTTPClientTool(maxBodySize int64) *HTTPClientTool {
 	if maxBodySize <= 0 {
-		maxBodySize = 5 * 1024 * 1024 // Default 5MB
+		maxBodySize = 5 * 1024 * 1024 // Default: 5MB.
 	}
 
 	schema := tools.CreateToolSchema(
@@ -59,7 +59,8 @@ func NewHTTPClientTool(maxBodySize int64) *HTTPClientTool {
 		[]string{"method", "url"},
 	)
 
-	baseTool := tools.NewBaseTool("http_client", "HTTP client tool for fetching network resources", schema)
+	baseTool := tools.NewBaseTool("http_client", "HTTP client tool for fetching network resources", schema).
+		WithCapabilities(tools.CapabilityNetwork)
 
 	return &HTTPClientTool{
 		BaseTool: baseTool,
@@ -70,14 +71,13 @@ func NewHTTPClientTool(maxBodySize int64) *HTTPClientTool {
 	}
 }
 
-// Execute performs the HTTP request
-func (t *HTTPClientTool) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
+// Execute performs an HTTP request.
+func (t *HTTPClientTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var httpReq HTTPRequest
 	if err := json.Unmarshal(input, &httpReq); err != nil {
 		return nil, schema.NewToolError(t.Name(), "parse_input", err)
 	}
 
-	// Validate input
 	if httpReq.Method == "" {
 		return t.errorResponse("HTTP method cannot be empty")
 	}
@@ -85,35 +85,33 @@ func (t *HTTPClientTool) Execute(ctx runtime.Context, input json.RawMessage) (js
 		return t.errorResponse("URL cannot be empty")
 	}
 
-	// Normalize the HTTP method
 	httpReq.Method = strings.ToUpper(httpReq.Method)
 
-	// Configure timeout
+	reqCtx := ctx
 	if httpReq.Timeout > 0 {
-		t.client.Timeout = time.Duration(httpReq.Timeout) * time.Second
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(ctx, time.Duration(httpReq.Timeout)*time.Second)
+		defer cancel()
 	}
 
 	startTime := time.Now()
 
-	// Construct the request
 	var bodyReader io.Reader
 	if httpReq.Body != "" {
 		bodyReader = strings.NewReader(httpReq.Body)
 	}
 
-	req, err := http.NewRequest(httpReq.Method, httpReq.URL, bodyReader)
+	req, err := http.NewRequestWithContext(reqCtx, httpReq.Method, httpReq.URL, bodyReader)
 	if err != nil {
 		return t.errorResponse(fmt.Sprintf("failed to create request: %v", err))
 	}
 
-	// Apply headers
 	if httpReq.Headers != nil {
 		for key, value := range httpReq.Headers {
 			req.Header.Set(key, value)
 		}
 	}
 
-	// Auto-detect Content-Type when a body is provided without one
 	if httpReq.Body != "" && req.Header.Get("Content-Type") == "" {
 		if t.isJSON(httpReq.Body) {
 			req.Header.Set("Content-Type", "application/json")
@@ -122,7 +120,6 @@ func (t *HTTPClientTool) Execute(ctx runtime.Context, input json.RawMessage) (js
 		}
 	}
 
-	// Send the request
 	resp, err := t.client.Do(req)
 	if err != nil {
 		return t.errorResponse(fmt.Sprintf("request failed: %v", err))
@@ -131,22 +128,19 @@ func (t *HTTPClientTool) Execute(ctx runtime.Context, input json.RawMessage) (js
 
 	duration := time.Since(startTime)
 
-	// Limit the response body size
 	limitedReader := io.LimitReader(resp.Body, t.maxBodySize)
 	body, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return t.errorResponse(fmt.Sprintf("failed to read response body: %v", err))
 	}
 
-	// Extract response headers
 	headers := make(map[string]string)
 	for key, values := range resp.Header {
 		if len(values) > 0 {
-			headers[key] = values[0] // Use the first value
+			headers[key] = values[0]
 		}
 	}
 
-	// Build the response
 	httpResp := HTTPResponse{
 		Success:    resp.StatusCode >= 200 && resp.StatusCode < 300,
 		StatusCode: resp.StatusCode,
@@ -160,7 +154,7 @@ func (t *HTTPClientTool) Execute(ctx runtime.Context, input json.RawMessage) (js
 	return json.Marshal(httpResp)
 }
 
-// errorResponse builds an error response
+// errorResponse builds an error response.
 func (t *HTTPClientTool) errorResponse(errorMsg string) (json.RawMessage, error) {
 	resp := HTTPResponse{
 		Success: false,
@@ -169,15 +163,15 @@ func (t *HTTPClientTool) errorResponse(errorMsg string) (json.RawMessage, error)
 	return json.Marshal(resp)
 }
 
-// isJSON checks whether the string is JSON
+// isJSON checks whether a string is JSON.
 func (t *HTTPClientTool) isJSON(s string) bool {
 	s = strings.TrimSpace(s)
 	return (strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
 		(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]"))
 }
 
-// ExecuteAsync performs the request asynchronously
-func (t *HTTPClientTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
+// ExecuteAsync executes asynchronously.
+func (t *HTTPClientTool) ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
 	resultChan := make(chan tools.ToolResult, 1)
 
 	go func() {

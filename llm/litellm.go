@@ -1,24 +1,24 @@
 package llm
 
 import (
+	"context"
 	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 )
 
-// LiteLLMAdapter is an adapter for litellm.
+// LiteLLMAdapter is a litellm adapter.
 type LiteLLMAdapter struct {
 	*BaseModel
 	client *litellm.Client
 	model  string
 }
 
-// NewLiteLLMAdapter creates a new litellm adapter.
+// NewLiteLLMAdapter creates an adapter.
 func NewLiteLLMAdapter(model string, options ...litellm.ClientOption) *LiteLLMAdapter {
 	client := litellm.New(options...)
 
@@ -49,7 +49,7 @@ func NewLiteLLMAdapter(model string, options ...litellm.ClientOption) *LiteLLMAd
 	}
 }
 
-// NewOpenAIModel creates an OpenAI model adapter.
+// NewOpenAIModel creates an OpenAI adapter.
 func NewOpenAIModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
 	var options []litellm.ClientOption
 	if len(baseURL) > 0 {
@@ -60,7 +60,7 @@ func NewOpenAIModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
 	return NewLiteLLMAdapter(model, options...)
 }
 
-// NewAnthropicModel creates an Anthropic model adapter.
+// NewAnthropicModel creates an Anthropic adapter.
 func NewAnthropicModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
 	var options []litellm.ClientOption
 	if len(baseURL) > 0 {
@@ -71,7 +71,7 @@ func NewAnthropicModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter 
 	return NewLiteLLMAdapter(model, options...)
 }
 
-// NewGeminiModel creates a Gemini model adapter.
+// NewGeminiModel creates a Gemini adapter.
 func NewGeminiModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
 	var options []litellm.ClientOption
 	if len(baseURL) > 0 {
@@ -82,8 +82,8 @@ func NewGeminiModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
 	return NewLiteLLMAdapter(model, options...)
 }
 
-// Generate generates a response.
-func (l *LiteLLMAdapter) Generate(ctx runtime.Context, req *Request) (*Response, error) {
+// Generate produces a response.
+func (l *LiteLLMAdapter) Generate(ctx context.Context, req *Request) (*Response, error) {
 	// Merge config
 	cfg := l.config
 	if req != nil && req.Config != nil {
@@ -120,8 +120,8 @@ func (l *LiteLLMAdapter) Generate(ctx runtime.Context, req *Request) (*Response,
 	}, nil
 }
 
-// GenerateStream generates a streaming response.
-func (l *LiteLLMAdapter) GenerateStream(ctx runtime.Context, req *Request) (<-chan schema.StreamEvent, error) {
+// GenerateStream produces a streaming response.
+func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, req *Request) (<-chan schema.StreamEvent, error) {
 	cfg := l.config
 	if req != nil && req.Config != nil {
 		cfg = req.Config
@@ -212,7 +212,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx runtime.Context, req *Request) (<-ch
 	return eventChan, nil
 }
 
-// convertMessages converts the message format.
+// convertMessages converts message formats.
 func (l *LiteLLMAdapter) convertMessages(messages []schema.Message) ([]litellm.Message, error) {
 	llmMessages := make([]litellm.Message, len(messages))
 
@@ -384,7 +384,7 @@ func buildToolCalls(builders map[int]*toolCallBuilder) []schema.ToolCall {
 	return toolCalls
 }
 
-// Get the maximum number of tokens for the model.
+// getMaxTokens returns the model max tokens.
 func getMaxTokens(model string) int {
 	// Return the corresponding maximum number of tokens based on the model name.
 	switch model {
@@ -408,11 +408,11 @@ func getMaxTokens(model string) int {
 }
 
 func getContextSize(model string) int {
-	// Usually the context size is equal to the maximum number of tokens.
+	// Context size usually equals max tokens.
 	return getMaxTokens(model)
 }
 
-// extractProvider extracts the provider from the model name.
+// extractProvider infers provider from model name.
 func extractProvider(model string) string {
 	if strings.HasPrefix(model, "gpt-") {
 		return "openai"
@@ -429,7 +429,7 @@ func extractProvider(model string) string {
 	return "unknown"
 }
 
-// Check if the model supports tool calling.
+// supportsToolCalling checks whether tool calling is supported.
 func supportsToolCalling(model string) bool {
 	supportedModels := []string{
 		"gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini",

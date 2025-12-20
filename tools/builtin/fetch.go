@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,11 +12,10 @@ import (
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/tools"
 )
 
-// FetchTool fetches and processes content from URLs
+// FetchTool fetches and processes web content.
 type FetchTool struct {
 	*tools.BaseTool
 	client      *http.Client
@@ -40,7 +40,7 @@ type FetchResponse struct {
 
 func NewFetchTool(maxBodySize int64) *FetchTool {
 	if maxBodySize <= 0 {
-		maxBodySize = 5 * 1024 * 1024 // Default 5MB
+		maxBodySize = 5 * 1024 * 1024 // Default: 5MB.
 	}
 
 	schema := tools.CreateToolSchema(
@@ -57,7 +57,8 @@ func NewFetchTool(maxBodySize int64) *FetchTool {
 		[]string{"url", "format"},
 	)
 
-	baseTool := tools.NewBaseTool("fetch", "Fetch and process content from URLs", schema)
+	baseTool := tools.NewBaseTool("fetch", "Fetch and process content from URLs", schema).
+		WithCapabilities(tools.CapabilityNetwork)
 
 	return &FetchTool{
 		BaseTool: baseTool,
@@ -73,7 +74,8 @@ func NewFetchTool(maxBodySize int64) *FetchTool {
 	}
 }
 
-func (t *FetchTool) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
+// Execute performs the fetch.
+func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var req FetchRequest
 	if err := json.Unmarshal(input, &req); err != nil {
 		return t.errorResponse("Failed to parse fetch parameters: " + err.Error())
@@ -91,15 +93,18 @@ func (t *FetchTool) Execute(ctx runtime.Context, input json.RawMessage) (json.Ra
 		return t.errorResponse("Format must be one of: text, markdown, html")
 	}
 
+	reqCtx := ctx
 	if req.Timeout > 0 {
-		maxTimeout := 120 // 2 minutes
+		maxTimeout := 120 // 2 minutes.
 		if req.Timeout > maxTimeout {
 			req.Timeout = maxTimeout
 		}
-		t.client.Timeout = time.Duration(req.Timeout) * time.Second
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Second)
+		defer cancel()
 	}
 
-	httpReq, err := http.NewRequest("GET", req.URL, nil)
+	httpReq, err := http.NewRequestWithContext(reqCtx, "GET", req.URL, nil)
 	if err != nil {
 		return t.errorResponse(fmt.Sprintf("Failed to create request: %v", err))
 	}
@@ -123,7 +128,6 @@ func (t *FetchTool) Execute(ctx runtime.Context, input json.RawMessage) (json.Ra
 
 	content := string(body)
 
-	// Validate UTF-8
 	if !utf8.ValidString(content) {
 		return t.errorResponse("Response content is not valid UTF-8")
 	}
@@ -131,7 +135,6 @@ func (t *FetchTool) Execute(ctx runtime.Context, input json.RawMessage) (json.Ra
 	contentType := resp.Header.Get("Content-Type")
 	truncated := false
 
-	// Process content based on format
 	switch format {
 	case "text":
 		if strings.Contains(contentType, "text/html") {
@@ -196,7 +199,8 @@ func (t *FetchTool) errorResponse(errorMsg string) (json.RawMessage, error) {
 	return json.Marshal(resp)
 }
 
-func (t *FetchTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
+// ExecuteAsync executes asynchronously.
+func (t *FetchTool) ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
 	resultChan := make(chan tools.ToolResult, 1)
 
 	go func() {

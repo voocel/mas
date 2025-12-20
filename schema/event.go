@@ -2,7 +2,7 @@ package schema
 
 import "time"
 
-// EventType enumerates streaming event types
+// EventType defines stream event types.
 type EventType string
 
 const (
@@ -19,7 +19,7 @@ const (
 	EventStepSkipped EventType = "step_skipped"
 )
 
-// StreamEvent represents an event emitted during streaming execution
+// StreamEvent represents a stream event.
 type StreamEvent struct {
 	Type      EventType   `json:"type"`
 	Data      interface{} `json:"data,omitempty"`
@@ -28,37 +28,37 @@ type StreamEvent struct {
 	Error     error       `json:"error,omitempty"`
 }
 
-// TokenEvent captures token-level streaming data
+// TokenEvent represents a token-level event.
 type TokenEvent struct {
 	Token string `json:"token"`
 	Delta string `json:"delta,omitempty"`
 }
 
-// ToolCallEvent captures a tool invocation event
+// ToolCallEvent represents a tool call event.
 type ToolCallEvent struct {
 	ToolCall ToolCall `json:"tool_call"`
 }
 
-// ToolResultEvent captures the result of a tool invocation
+// ToolResultEvent represents a tool result event.
 type ToolResultEvent struct {
 	ToolResult ToolResult `json:"tool_result"`
 }
 
-// StateChangeEvent records a state transition
+// StateChangeEvent represents a state change event.
 type StateChangeEvent struct {
 	Key      string      `json:"key"`
 	OldValue interface{} `json:"old_value,omitempty"`
 	NewValue interface{} `json:"new_value"`
 }
 
-// AgentSwitchEvent records an agent switch event
+// AgentSwitchEvent represents an agent switch event.
 type AgentSwitchEvent struct {
 	FromAgent string `json:"from_agent"`
 	ToAgent   string `json:"to_agent"`
 	Reason    string `json:"reason,omitempty"`
 }
 
-// NewStreamEvent constructs a streaming event
+// NewStreamEvent creates a stream event.
 func NewStreamEvent(eventType EventType, data interface{}) StreamEvent {
 	return StreamEvent{
 		Type:      eventType,
@@ -67,7 +67,7 @@ func NewStreamEvent(eventType EventType, data interface{}) StreamEvent {
 	}
 }
 
-// NewErrorEvent constructs an error event
+// NewErrorEvent creates an error event.
 func NewErrorEvent(err error, agentID string) StreamEvent {
 	return StreamEvent{
 		Type:      EventError,
@@ -77,7 +77,7 @@ func NewErrorEvent(err error, agentID string) StreamEvent {
 	}
 }
 
-// NewTokenEvent constructs a token event
+// NewTokenEvent creates a token event.
 func NewTokenEvent(token, delta string, agentID string) StreamEvent {
 	return StreamEvent{
 		Type:    EventToken,
@@ -90,7 +90,7 @@ func NewTokenEvent(token, delta string, agentID string) StreamEvent {
 	}
 }
 
-// NewToolCallEvent constructs a tool call event
+// NewToolCallEvent creates a tool call event.
 func NewToolCallEvent(toolCall ToolCall, agentID string) StreamEvent {
 	return StreamEvent{
 		Type:    EventToolCall,
@@ -102,7 +102,7 @@ func NewToolCallEvent(toolCall ToolCall, agentID string) StreamEvent {
 	}
 }
 
-// NewToolResultEvent constructs a tool result event
+// NewToolResultEvent creates a tool result event.
 func NewToolResultEvent(toolResult ToolResult, agentID string) StreamEvent {
 	return StreamEvent{
 		Type:    EventToolResult,

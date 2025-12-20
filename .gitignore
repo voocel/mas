@@ -16,6 +16,7 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+temp
 
 # Go workspace file
 go.work

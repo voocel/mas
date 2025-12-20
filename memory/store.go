@@ -2,127 +2,77 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
 	"github.com/voocel/mas/schema"
 )
 
-type ConversationStore interface {
+// Store defines the conversation memory interface.
+type Store interface {
 	Add(ctx context.Context, message schema.Message) error
-	GetConversationContext(ctx context.Context) ([]schema.Message, error)
-	Clone() ConversationStore
+	History(ctx context.Context) ([]schema.Message, error)
+	Clone() Store
 }
 
-type Summarizer interface {
-	Summarize(ctx context.Context, history []schema.Message) (string, error)
+// Buffer is a simple in-memory store with window trimming.
+type Buffer struct {
+	mu       sync.RWMutex
+	window   int
+	messages []schema.Message
 }
 
-// Store is the default in-memory implementation of ConversationStore.
-type Store struct {
-	mu         sync.RWMutex
-	window     int
-	messages   []schema.Message
-	summarizer Summarizer
-}
-
-type Option func(*Store)
-
-// WithWindow limits how many recent messages are retained; non-positive keeps the full history.
-func WithWindow(window int) Option {
-	return func(store *Store) {
-		if window > 0 {
-			store.window = window
-		}
-	}
-}
-
-func WithSummarizer(s Summarizer) Option {
-	return func(store *Store) {
-		store.summarizer = s
-	}
-}
-
-// NewStore constructs the in-memory conversation store.
-func NewStore(opts ...Option) *Store {
-	store := &Store{
+// NewBuffer creates an in-memory store; window <= 0 means no trimming.
+func NewBuffer(window int) *Buffer {
+	return &Buffer{
+		window:   window,
 		messages: make([]schema.Message, 0),
 	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(store)
-		}
-	}
-	return store
 }
 
-// Add appends a new message to the store.
-func (s *Store) Add(_ context.Context, message schema.Message) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// Add writes a message.
+func (b *Buffer) Add(_ context.Context, message schema.Message) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	if message.Timestamp.IsZero() {
 		message.Timestamp = time.Now()
 	}
-
-	s.messages = append(s.messages, *message.Clone())
-	s.trimWindow()
+	b.messages = append(b.messages, *message.Clone())
+	b.trim()
 	return nil
 }
 
-// GetConversationContext returns a copy of the current conversation history.
-func (s *Store) GetConversationContext(context.Context) ([]schema.Message, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// History returns current history.
+func (b *Buffer) History(context.Context) ([]schema.Message, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 
-	history := make([]schema.Message, len(s.messages))
-	for i, msg := range s.messages {
+	history := make([]schema.Message, len(b.messages))
+	for i, msg := range b.messages {
 		history[i] = *msg.Clone()
 	}
 	return history, nil
 }
 
-// Clone returns a deep copy so runtime.Context cloning has isolated history.
-func (s *Store) Clone() ConversationStore {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// Clone returns a copy.
+func (b *Buffer) Clone() Store {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 
-	clone := &Store{
-		window:     s.window,
-		summarizer: s.summarizer,
-		messages:   make([]schema.Message, len(s.messages)),
+	clone := &Buffer{
+		window:   b.window,
+		messages: make([]schema.Message, len(b.messages)),
 	}
-	for i, msg := range s.messages {
+	for i, msg := range b.messages {
 		clone.messages[i] = *msg.Clone()
 	}
 	return clone
 }
 
-// Summarize uses the configured Summarizer to generate a conversation summary.
-func (s *Store) Summarize(ctx context.Context) (string, error) {
-	s.mu.RLock()
-	summarizer := s.summarizer
-	history := make([]schema.Message, len(s.messages))
-	for i, msg := range s.messages {
-		history[i] = *msg.Clone()
-	}
-	s.mu.RUnlock()
-
-	if summarizer == nil {
-		return "", errors.New("memory: summarizer not configured")
-	}
-	return summarizer.Summarize(ctx, history)
-}
-
-func (s *Store) trimWindow() {
-	if s.window <= 0 {
+func (b *Buffer) trim() {
+	if b.window <= 0 || len(b.messages) <= b.window {
 		return
 	}
-	if len(s.messages) <= s.window {
-		return
-	}
-	s.messages = append([]schema.Message(nil), s.messages[len(s.messages)-s.window:]...)
+	b.messages = append([]schema.Message(nil), b.messages[len(b.messages)-b.window:]...)
 }
-
-var _ ConversationStore = (*Store)(nil)

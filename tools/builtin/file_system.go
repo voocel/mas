@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,42 +9,41 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/mas/runtime"
 	"github.com/voocel/mas/schema"
 	"github.com/voocel/mas/tools"
 )
 
-// FileSystemTool provides filesystem operations
+// FileSystemTool provides filesystem operations.
 type FileSystemTool struct {
 	*tools.BaseTool
-	allowedPaths []string // Allowed paths
-	maxFileSize  int64    // Maximum file size (bytes)
+	allowedPaths []string // Allowed paths.
+	maxFileSize  int64    // Max file size in bytes.
 }
 
-// FileReadInput captures read parameters
+// FileReadInput defines read parameters.
 type FileReadInput struct {
 	Path string `json:"path" description:"Path to read"`
 }
 
-// FileWriteInput captures write parameters
+// FileWriteInput defines write parameters.
 type FileWriteInput struct {
 	Path    string `json:"path" description:"Path to write"`
 	Content string `json:"content" description:"Content to write"`
 	Append  bool   `json:"append,omitempty" description:"Whether to append; defaults to overwrite"`
 }
 
-// FileListInput captures list parameters
+// FileListInput defines list parameters.
 type FileListInput struct {
 	Path      string `json:"path" description:"Directory path to list"`
 	Recursive bool   `json:"recursive,omitempty" description:"Whether to list recursively"`
 }
 
-// FileDeleteInput captures delete parameters
+// FileDeleteInput defines delete parameters.
 type FileDeleteInput struct {
 	Path string `json:"path" description:"Path of the file or directory to delete"`
 }
 
-// FileOutput describes a filesystem response
+// FileOutput defines the response payload.
 type FileOutput struct {
 	Success bool       `json:"success"`
 	Message string     `json:"message,omitempty"`
@@ -52,7 +52,7 @@ type FileOutput struct {
 	Error   string     `json:"error,omitempty"`
 }
 
-// FileInfo summarizes file metadata
+// FileInfo defines file metadata.
 type FileInfo struct {
 	Name    string    `json:"name"`
 	Path    string    `json:"path"`
@@ -61,10 +61,10 @@ type FileInfo struct {
 	ModTime time.Time `json:"mod_time"`
 }
 
-// NewFileSystemTool constructs the filesystem tool
+// NewFileSystemTool creates a filesystem tool.
 func NewFileSystemTool(allowedPaths []string, maxFileSize int64) *FileSystemTool {
 	if maxFileSize <= 0 {
-		maxFileSize = 10 * 1024 * 1024 // Default 10MB
+		maxFileSize = 10 * 1024 * 1024 // Default: 10MB.
 	}
 
 	schema := tools.CreateToolSchema(
@@ -79,7 +79,8 @@ func NewFileSystemTool(allowedPaths []string, maxFileSize int64) *FileSystemTool
 		[]string{"action", "path"},
 	)
 
-	baseTool := tools.NewBaseTool("file_system", "Filesystem tool for reading, writing, listing, and deleting files", schema)
+	baseTool := tools.NewBaseTool("file_system", "Filesystem tool for reading, writing, listing, and deleting files", schema).
+		WithCapabilities(tools.CapabilityFile)
 
 	return &FileSystemTool{
 		BaseTool:     baseTool,
@@ -88,8 +89,8 @@ func NewFileSystemTool(allowedPaths []string, maxFileSize int64) *FileSystemTool
 	}
 }
 
-// Execute performs the filesystem operation
-func (t *FileSystemTool) Execute(ctx runtime.Context, input json.RawMessage) (json.RawMessage, error) {
+// Execute runs a filesystem operation.
+func (t *FileSystemTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var params map[string]interface{}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, schema.NewToolError(t.Name(), "parse_input", err)
@@ -105,7 +106,6 @@ func (t *FileSystemTool) Execute(ctx runtime.Context, input json.RawMessage) (js
 		return nil, schema.NewToolError(t.Name(), "invalid_path", fmt.Errorf("path must be a string"))
 	}
 
-	// Check path permissions
 	if !t.isPathAllowed(path) {
 		output := FileOutput{
 			Success: false,
@@ -135,9 +135,8 @@ func (t *FileSystemTool) Execute(ctx runtime.Context, input json.RawMessage) (js
 	}
 }
 
-// readFile reads a file
+// readFile reads a file.
 func (t *FileSystemTool) readFile(path string) (json.RawMessage, error) {
-	// Check file size
 	info, err := os.Stat(path)
 	if err != nil {
 		output := FileOutput{
@@ -172,9 +171,8 @@ func (t *FileSystemTool) readFile(path string) (json.RawMessage, error) {
 	return json.Marshal(output)
 }
 
-// writeFile writes to a file
+// writeFile writes a file.
 func (t *FileSystemTool) writeFile(path, content string, append bool) (json.RawMessage, error) {
-	// Check payload size
 	if int64(len(content)) > t.maxFileSize {
 		output := FileOutput{
 			Success: false,
@@ -183,7 +181,6 @@ func (t *FileSystemTool) writeFile(path, content string, append bool) (json.RawM
 		return json.Marshal(output)
 	}
 
-	// Ensure the directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		output := FileOutput{
@@ -229,7 +226,7 @@ func (t *FileSystemTool) writeFile(path, content string, append bool) (json.RawM
 	return json.Marshal(output)
 }
 
-// listFiles enumerates directory entries
+// listFiles lists directory entries.
 func (t *FileSystemTool) listFiles(path string, recursive bool) (json.RawMessage, error) {
 	var files []FileInfo
 
@@ -287,7 +284,7 @@ func (t *FileSystemTool) listFiles(path string, recursive bool) (json.RawMessage
 	return json.Marshal(output)
 }
 
-// deleteFile removes files or directories
+// deleteFile deletes a file or directory.
 func (t *FileSystemTool) deleteFile(path string) (json.RawMessage, error) {
 	err := os.RemoveAll(path)
 	if err != nil {
@@ -305,31 +302,33 @@ func (t *FileSystemTool) deleteFile(path string) (json.RawMessage, error) {
 	return json.Marshal(output)
 }
 
-// isPathAllowed verifies whether the path is permitted
+// isPathAllowed checks whether a path is allowed.
 func (t *FileSystemTool) isPathAllowed(path string) bool {
 	if len(t.allowedPaths) == 0 {
-		return true // When no restrictions are set, allow all paths
+		return true
 	}
 
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return false
 	}
+	absPath = filepath.Clean(absPath)
 
 	for _, allowedPath := range t.allowedPaths {
 		absAllowed, err := filepath.Abs(allowedPath)
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(absPath, absAllowed) {
+		absAllowed = filepath.Clean(absAllowed)
+		if absPath == absAllowed || strings.HasPrefix(absPath, absAllowed+string(os.PathSeparator)) {
 			return true
 		}
 	}
 	return false
 }
 
-// ExecuteAsync performs the operation asynchronously
-func (t *FileSystemTool) ExecuteAsync(ctx runtime.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
+// ExecuteAsync executes asynchronously.
+func (t *FileSystemTool) ExecuteAsync(ctx context.Context, input json.RawMessage) (<-chan tools.ToolResult, error) {
 	resultChan := make(chan tools.ToolResult, 1)
 
 	go func() {

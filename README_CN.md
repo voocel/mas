@@ -1,10 +1,13 @@
 # MAS
 
-MAS 是一个现代的、高性能的 Go 多智能体系统框架，专为构建具有原生 Go 性能和类型安全的智能应用而设计。
+MAS 是一个轻量级、可插拔的 Go 多 Agent SDK，强调“少概念、可组合、易上手”。
 
-![架构图](./docs/architecture.md)
+- **轻量**：Agent 只负责描述（系统提示、工具集），不隐藏执行逻辑
+- **可插拔**：执行链路由 Runner 控制，可替换模型、工具执行器与中间件
+- **易用**：3~5 行即可跑通单 Agent
 
-[文档](./docs/) | [示例](./examples/) | [English](./README.md)
+
+[示例](./examples/) | [English](./README.md)
 
 ## 安装
 
@@ -14,16 +17,6 @@ go get github.com/voocel/mas
 
 ## 快速开始
 
-**设置环境变量：**
-
-```bash
-export LLM_API_KEY="your-api-key"
-export LLM_MODEL="gpt-5"
-export LLM_BASE_URL="https://api.openai.com/v1"  # 可选
-```
-
-**基础用法：**
-
 ```go
 package main
 
@@ -32,130 +25,193 @@ import (
     "fmt"
     "os"
 
+    "github.com/voocel/mas"
     "github.com/voocel/mas/agent"
     "github.com/voocel/mas/llm"
-    "github.com/voocel/mas/runtime"
+    "github.com/voocel/mas/runner"
     "github.com/voocel/mas/schema"
+    "github.com/voocel/mas/tools/builtin"
 )
 
 func main() {
-    // 创建 LLM 模型
-    model, _ := llm.NewLiteLLMAdapter(
-        os.Getenv("LLM_MODEL"),
-        os.Getenv("LLM_API_KEY"),
-        os.Getenv("LLM_BASE_URL"),
+    model := llm.NewOpenAIModel(
+        "gpt-5",
+        os.Getenv("OPENAI_API_KEY"),
+        os.Getenv("OPENAI_API_BASE_URL"),
     )
 
-    // 创建智能体
-    agent := agent.NewAgent("assistant", "AI Assistant", model)
+    // 极简入口（推荐）
+    resp, err := mas.Query(
+        context.Background(),
+        model,
+        "计算 15 * 8 + 7",
+        mas.WithPreset("assistant"),
+        mas.WithTools(builtin.NewCalculator()),
+    )
+    if err != nil {
+        fmt.Println("error:", err)
+        return
+    }
+    fmt.Println(resp.Content)
 
-    // 执行对话
-    ctx := runtime.NewContext(context.Background(), "session-1", "trace-1")
-    response, _ := agent.Execute(ctx, schema.Message{
+    // 进阶：自定义 Runner
+    ag := agent.New(
+        "assistant",
+        "assistant",
+        agent.WithSystemPrompt("你是一个友好的助手，善于解释与计算。"),
+        agent.WithTools(builtin.NewCalculator()),
+    )
+
+    r := runner.New(runner.Config{Model: model})
+
+    resp, err := r.Run(context.Background(), ag, schema.Message{
         Role:    schema.RoleUser,
-        Content: "你好，你好吗？",
+        Content: "计算 15 * 8 + 7",
     })
+    if err != nil {
+        fmt.Println("error:", err)
+        return
+    }
 
-    fmt.Printf("Agent: %s\n", response.Content)
+    fmt.Println(resp.Content)
 }
 ```
 
-**带工具的智能体：**
+## 会话式 Client
 
 ```go
-import "github.com/voocel/mas/tools/builtin"
-
-// 创建带计算器工具的智能体
-calculator := builtin.NewCalculator()
-agent := agent.NewAgent("math-agent", "Math Assistant", model,
-    agent.WithTools(calculator),
+cli, _ := mas.NewClient(
+    model,
+    mas.WithPreset("assistant"),
+    mas.WithTools(builtin.NewCalculator()),
 )
+resp, _ := cli.Send(context.Background(), "继续计算 9 * 9")
+```
 
-response, _ := agent.Execute(ctx, schema.Message{
-    Role:    schema.RoleUser,
-    Content: "计算 15 * 8 + 7",
+## 结构化输出（JSON Schema）
+
+```go
+format := &llm.ResponseFormat{
+    Type: "json_object",
+}
+resp, _ := mas.Query(
+    context.Background(),
+    model,
+    "用 JSON 返回 {\"answer\": 42}",
+    mas.WithResponseFormat(format),
+)
+```
+
+## 完整结果（Usage/工具轨迹）
+
+```go
+result, _ := mas.QueryWithResult(
+    context.Background(),
+    model,
+    "计算 6 * 7",
+)
+fmt.Println(result.Message.Content, result.Usage.TotalTokens)
+```
+
+## 多 Agent（轻量 Team）
+
+```go
+import "github.com/voocel/mas/multi"
+
+team := multi.NewTeam()
+team.Add("researcher", researcher)
+team.Add("writer", writer)
+
+ag, _ := team.Route("researcher")
+resp, _ := runner.Run(ctx, ag, msg)
+```
+
+## 协作模式（轻量 but Powerful）
+
+```go
+// 顺序协作
+resp, _ := multi.RunSequential(ctx, r, []*agent.Agent{researcher, writer}, msg)
+
+// 并行协作 + 合并
+resp, _ := multi.RunParallel(ctx, r, []*agent.Agent{a1, a2}, msg, multi.FirstReducer)
+
+// 动态路由（handoff）
+router := &multi.KeywordRouter{
+    Rules:   map[string]string{"统计": "analyst", "写作": "writer"},
+    Default: "assistant",
+}
+resp, _ := multi.RunHandoff(ctx, r, team, router, msg, multi.WithMaxSteps(3))
+```
+
+## 中间件与策略
+
+```go
+import "github.com/voocel/mas/middleware"
+
+r := runner.New(runner.Config{
+    Model: model,
+    Middlewares: []runner.Middleware{
+        &middleware.TimeoutMiddleware{LLMTimeout: 10 * time.Second, ToolTimeout: 20 * time.Second},
+        &middleware.RetryMiddleware{MaxAttempts: 3},
+        middleware.NewToolAllowlist("calculator", "web_search"),
+        middleware.NewToolCapabilityPolicy(
+            middleware.AllowOnly(tools.CapabilityNetwork),
+            middleware.Deny(tools.CapabilityFile),
+        ),
+    },
 })
 ```
 
-**多智能体协作：**
+## 观测与追踪
 
 ```go
-import "github.com/voocel/mas/orchestrator"
+import "github.com/voocel/mas/observer"
 
-// 创建编排器
-orch := orchestrator.NewOrchestrator()
-
-// 添加智能体
-orch.AddAgent("researcher", researcher)
-orch.AddAgent("writer", writer)
-
-// 执行并自动路由
-result, _ := orch.Execute(ctx, orchestrator.ExecuteRequest{
-    Input: schema.Message{
-        Role:    schema.RoleUser,
-        Content: "研究并撰写关于AI趋势的文章",
-    },
-    Type: orchestrator.ExecuteTypeAuto, // 自动路由到最佳智能体
+r := runner.New(runner.Config{
+    Model:    model,
+    Observer: observer.NewLoggerObserver(os.Stdout),
+    Tracer:   observer.NewSimpleTimerTracer(os.Stdout),
 })
 ```
 
-**工作流编排：**
+## 结构化日志与指标
 
 ```go
-import "github.com/voocel/mas/workflows"
-
-// 创建工作流步骤
-preprocessStep := workflows.NewFunctionStep(
-    workflows.NewStepConfig("preprocess", "数据预处理"),
-    func(ctx runtime.Context, input schema.Message) (schema.Message, error) {
-        // 处理逻辑
-        return processedMessage, nil
-    },
+import (
+    "github.com/voocel/mas/middleware"
+    "github.com/voocel/mas/observer"
 )
 
-// 构建链式工作流
-workflow := workflows.NewChainBuilder("data-pipeline", "数据处理管道").
-    Then(preprocessStep).
-    Then(analysisStep).
-    Then(summaryStep).
-    Build()
+metrics := &middleware.MetricsObserver{}
+obs := observer.NewCompositeObserver(
+    observer.NewJSONObserver(os.Stdout),
+    metrics,
+)
+```
 
-// 执行工作流
-orch.AddWorkflow("data-pipeline", workflow)
-result, _ := orch.Execute(ctx, orchestrator.ExecuteRequest{
-    Input:  inputMessage,
-    Target: "data-pipeline",
-    Type:   orchestrator.ExecuteTypeWorkflow,
-})
+## 路由（可选）
+
+```go
+router := &multi.KeywordRouter{
+    Rules:   map[string]string{"统计": "analyst", "写作": "writer"},
+    Default: "assistant",
+}
+ag, _ := router.Select(msg, team)
 ```
 
 ## 核心概念
 
-### Agent vs Workflow
+- **Agent**：仅描述角色、系统提示与工具集
+- **Runner**：执行链路核心（模型调用 → 工具调用 → 回填 → 再生成）
+- **Tool**：独立功能单元，可标记能力（network/file/unsafe）
+- **Memory**：对话记忆（默认内存窗口）
 
-**Agent（智能体）** - 自主的智能实体，具有：
+## 设计理念
 
-- **智能决策**: 基于LLM的推理和工具选择
-- **动态行为**: 适应不同场景和上下文
-- **工具集成**: 访问各种工具和能力
-- **记忆管理**: 维护对话历史和上下文
-
-**Workflow（工作流）** - 结构化的流程编排，具有：
-
-- **确定性执行**: 预定义的步骤和控制流
-- **并行处理**: 独立任务的并发执行
-- **条件分支**: 基于条件的动态路由
-- **可组合性**: 步骤可以是函数、智能体或其他工作流
-
-**灵活组合**：
-
-- **Agent in Workflow**: 工作流步骤可以是智能体
-- **Workflow in Agent**: 智能体可以调用工作流作为工具
-- **Hybrid Execution**: 在同一任务中混合使用智能体和工作流
-
-## 示例与集成
-
+- **显式执行**：所有执行步骤可观察、可拦截、可替换
+- **低心智负担**：最小 API 面向快速上手
+- **可扩展**：中间件与工具执行器可以自由注入
 
 ## 许可证
 
-Apache License 2.0 License
+Apache License 2.0

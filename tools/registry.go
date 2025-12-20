@@ -6,23 +6,27 @@ import (
 	"github.com/voocel/mas/schema"
 )
 
-// Registry stores registered tools
+// Registry stores registered tools.
 type Registry struct {
 	tools map[string]Tool
 	mutex sync.RWMutex
 }
 
-// NewRegistry constructs a registry
+// NewRegistry creates a registry.
 func NewRegistry() *Registry {
 	return &Registry{
 		tools: make(map[string]Tool),
 	}
 }
 
-// Register adds a tool
+// Register registers a tool.
 func (r *Registry) Register(tool Tool) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
+
+	if tool == nil {
+		return schema.NewValidationError("tool", tool, "tool cannot be nil")
+	}
 
 	name := tool.Name()
 	if name == "" {
@@ -37,7 +41,7 @@ func (r *Registry) Register(tool Tool) error {
 	return nil
 }
 
-// Unregister removes a tool
+// Unregister removes a tool.
 func (r *Registry) Unregister(name string) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
@@ -50,7 +54,7 @@ func (r *Registry) Unregister(name string) error {
 	return nil
 }
 
-// Get retrieves a tool
+// Get retrieves a tool.
 func (r *Registry) Get(name string) (Tool, bool) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -59,7 +63,7 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return tool, exists
 }
 
-// List returns all tools
+// List returns all tools.
 func (r *Registry) List() []Tool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -71,7 +75,7 @@ func (r *Registry) List() []Tool {
 	return tools
 }
 
-// Names returns registered tool names
+// Names returns tool names.
 func (r *Registry) Names() []string {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -83,7 +87,7 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-// Count returns the number of tools
+// Count returns the number of tools.
 func (r *Registry) Count() int {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -91,7 +95,7 @@ func (r *Registry) Count() int {
 	return len(r.tools)
 }
 
-// Clear removes all tools
+// Clear clears the registry.
 func (r *Registry) Clear() {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
@@ -99,7 +103,7 @@ func (r *Registry) Clear() {
 	r.tools = make(map[string]Tool)
 }
 
-// Has reports whether a tool exists
+// Has reports whether a tool exists.
 func (r *Registry) Has(name string) bool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -108,7 +112,7 @@ func (r *Registry) Has(name string) bool {
 	return exists
 }
 
-// GetByNames returns tools by name
+// GetByNames fetches tools by names.
 func (r *Registry) GetByNames(names []string) []Tool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -122,7 +126,7 @@ func (r *Registry) GetByNames(names []string) []Tool {
 	return tools
 }
 
-// Filter returns tools that satisfy the predicate
+// Filter filters tools by predicate.
 func (r *Registry) Filter(predicate func(Tool) bool) []Tool {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -136,7 +140,7 @@ func (r *Registry) Filter(predicate func(Tool) bool) []Tool {
 	return filtered
 }
 
-// GetSchemas returns schemas for all tools
+// GetSchemas returns all schemas.
 func (r *Registry) GetSchemas() map[string]*ToolSchema {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -148,7 +152,7 @@ func (r *Registry) GetSchemas() map[string]*ToolSchema {
 	return schemas
 }
 
-// Clone duplicates the registry
+// Clone creates a copy of the registry.
 func (r *Registry) Clone() *Registry {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -160,7 +164,7 @@ func (r *Registry) Clone() *Registry {
 	return clone
 }
 
-// Merge merges another registry
+// Merge merges another registry.
 func (r *Registry) Merge(other *Registry) error {
 	if other == nil {
 		return nil
@@ -182,20 +186,20 @@ func (r *Registry) Merge(other *Registry) error {
 	return nil
 }
 
-// Global tool registry
+// Global tool registry.
 var globalRegistry = NewRegistry()
 
-// GlobalRegistry returns the global registry
+// GlobalRegistry returns the global registry.
 func GlobalRegistry() *Registry {
 	return globalRegistry
 }
 
-// Register adds a tool to the global registry
+// Register registers a tool in the global registry.
 func Register(tool Tool) error {
 	return globalRegistry.Register(tool)
 }
 
-// Get retrieves a tool from the global registry
+// Get retrieves a tool from the global registry.
 func Get(name string) (Tool, bool) {
 	return globalRegistry.Get(name)
 }

@@ -71,3 +71,35 @@ func TestCapabilityPolicy(t *testing.T) {
 		t.Fatalf("expected capability denied error")
 	}
 }
+
+func TestHITLInterruptLLM(t *testing.T) {
+	mw := &HITLMiddleware{
+		Approver: HITLFunc{
+			LLM: func(ctx context.Context, state *runner.State, req *llm.Request) HITLDecision {
+				return Interrupt("need review")
+			},
+		},
+	}
+
+	_, err := mw.HandleLLM(context.Background(), &runner.State{}, &llm.Request{}, func(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+		return &llm.Response{Message: schema.Message{Role: schema.RoleAssistant}}, nil
+	})
+	if err == nil || !IsHITLInterrupt(err) {
+		t.Fatalf("expected hitl interrupt error")
+	}
+}
+
+func TestHITLInterruptTool(t *testing.T) {
+	mw := &HITLMiddleware{
+		Approver: HITLFunc{
+			Tool: func(ctx context.Context, state *runner.ToolState) HITLDecision {
+				return Interrupt("tool needs approval")
+			},
+		},
+	}
+
+	err := mw.BeforeTool(context.Background(), &runner.ToolState{Call: &schema.ToolCall{Name: "echo"}})
+	if err == nil || !IsHITLInterrupt(err) {
+		t.Fatalf("expected hitl interrupt error")
+	}
+}

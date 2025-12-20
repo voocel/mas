@@ -226,13 +226,15 @@ func (r *Runner) RunFromCheckpoint(ctx context.Context, ag *agent.Agent, checkpo
 	}
 
 	store := memory.NewBuffer(r.config.HistoryWindow)
+	filtered := make([]schema.Message, 0, len(checkpoint.Messages))
 	for _, msg := range checkpoint.Messages {
 		if msg.Role == schema.RoleSystem {
 			continue
 		}
-		if err := store.Add(ctx, msg); err != nil {
-			return RunResult{}, err
-		}
+		filtered = append(filtered, msg)
+	}
+	if err := store.AddBatch(ctx, filtered); err != nil {
+		return RunResult{}, err
 	}
 
 	run := r.WithMemory(store)

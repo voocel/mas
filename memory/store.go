@@ -11,7 +11,9 @@ import (
 // Store defines the conversation memory interface.
 type Store interface {
 	Add(ctx context.Context, message schema.Message) error
+	AddBatch(ctx context.Context, messages []schema.Message) error
 	History(ctx context.Context) ([]schema.Message, error)
+	Reset(ctx context.Context) error
 	Clone() Store
 }
 
@@ -43,6 +45,30 @@ func (b *Buffer) Add(_ context.Context, message schema.Message) error {
 	return nil
 }
 
+func (b *Buffer) AddBatch(ctx context.Context, messages []schema.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, message := range messages {
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+		if message.Timestamp.IsZero() {
+			message.Timestamp = time.Now()
+		}
+		b.messages = append(b.messages, *message.Clone())
+	}
+	b.trim()
+	return nil
+}
+
 // History returns current history.
 func (b *Buffer) History(context.Context) ([]schema.Message, error) {
 	b.mu.RLock()
@@ -53,6 +79,14 @@ func (b *Buffer) History(context.Context) ([]schema.Message, error) {
 		history[i] = *msg.Clone()
 	}
 	return history, nil
+}
+
+// Reset clears all stored messages.
+func (b *Buffer) Reset(context.Context) error {
+	b.mu.Lock()
+	b.messages = nil
+	b.mu.Unlock()
+	return nil
 }
 
 // Clone returns a copy.

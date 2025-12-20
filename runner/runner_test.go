@@ -38,6 +38,30 @@ func (m *mockModel) SupportsTools() bool     { return true }
 func (m *mockModel) SupportsStreaming() bool { return false }
 func (m *mockModel) Info() llm.ModelInfo     { return llm.ModelInfo{Name: "mock"} }
 
+type streamModel struct{}
+
+func (m *streamModel) Generate(ctx context.Context, req *llm.Request) (*llm.Response, error) {
+	return nil, nil
+}
+
+func (m *streamModel) GenerateStream(ctx context.Context, req *llm.Request) (<-chan schema.StreamEvent, error) {
+	ch := make(chan schema.StreamEvent, 3)
+	go func() {
+		defer close(ch)
+		ch <- schema.NewStreamEvent(schema.EventStart, nil)
+		ch <- schema.NewTokenEvent("hello", "hello", "")
+		ch <- schema.NewStreamEvent(schema.EventEnd, schema.Message{
+			Role:    schema.RoleAssistant,
+			Content: "done",
+		})
+	}()
+	return ch, nil
+}
+
+func (m *streamModel) SupportsTools() bool     { return false }
+func (m *streamModel) SupportsStreaming() bool { return true }
+func (m *streamModel) Info() llm.ModelInfo     { return llm.ModelInfo{Name: "stream"} }
+
 type echoTool struct {
 	*tools.BaseTool
 }
@@ -72,5 +96,44 @@ func TestRunnerToolLoop(t *testing.T) {
 	}
 	if model.calls != 2 {
 		t.Fatalf("expected 2 model calls, got %d", model.calls)
+	}
+}
+
+func TestRunStreamEventIDs(t *testing.T) {
+	model := &streamModel{}
+	ag := agent.New("a1", "a1")
+	r := New(Config{Model: model})
+
+	ch, err := r.RunStream(context.Background(), ag, schema.Message{
+		Role:    schema.RoleUser,
+		Content: "start",
+	})
+	if err != nil {
+		t.Fatalf("run stream error: %v", err)
+	}
+
+	var events []schema.StreamEvent
+	for event := range ch {
+		events = append(events, event)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected stream events")
+	}
+
+	runID := events[0].RunID
+	stepID := events[0].StepID
+	spanID := events[0].SpanID
+
+	if runID == "" || stepID == "" || spanID == "" {
+		t.Fatalf("expected non-empty ids, got run=%q step=%q span=%q", runID, stepID, spanID)
+	}
+
+	for _, event := range events {
+		if event.RunID != runID || event.StepID != stepID || event.SpanID != spanID {
+			t.Fatalf("inconsistent ids in stream events")
+		}
+		if event.AgentID == "" {
+			t.Fatalf("expected agent id on stream event")
+		}
 	}
 }

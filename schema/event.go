@@ -24,6 +24,9 @@ type StreamEvent struct {
 	Type      EventType   `json:"type"`
 	Data      interface{} `json:"data,omitempty"`
 	AgentID   string      `json:"agent_id,omitempty"`
+	RunID     RunID       `json:"run_id,omitempty"`
+	StepID    StepID      `json:"step_id,omitempty"`
+	SpanID    SpanID      `json:"span_id,omitempty"`
 	Timestamp time.Time   `json:"timestamp"`
 	Error     error       `json:"error,omitempty"`
 }
@@ -112,4 +115,11 @@ func NewToolResultEvent(toolResult ToolResult, agentID string) StreamEvent {
 		},
 		Timestamp: time.Now(),
 	}
+}
+
+func (e StreamEvent) WithIDs(runID RunID, stepID StepID, spanID SpanID) StreamEvent {
+	e.RunID = runID
+	e.StepID = stepID
+	e.SpanID = spanID
+	return e
 }

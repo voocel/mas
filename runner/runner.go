@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"github.com/voocel/mas/agent"
 	"github.com/voocel/mas/llm"
@@ -13,20 +15,28 @@ import (
 
 // Config controls Runner behavior.
 type Config struct {
-	Model         llm.ChatModel
-	Memory        memory.Store
-	ToolInvoker   tools.Invoker
-	Middlewares   []Middleware
-	Observer      Observer
-	Tracer        Tracer
+	Model          llm.ChatModel
+	Memory         memory.Store
+	ToolInvoker    tools.Invoker
+	Middlewares    []Middleware
+	Observer       Observer
+	Tracer         Tracer
+	RunIDGenerator func() string
 	ResponseFormat *llm.ResponseFormat
-	MaxTurns      int
-	HistoryWindow int
+	MaxTurns       int
+	HistoryWindow  int
 }
 
 // Runner executes an agent run loop.
 type Runner struct {
 	config Config
+}
+
+var runCounter uint64
+
+func defaultRunIDGenerator() string {
+	seq := atomic.AddUint64(&runCounter, 1)
+	return fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), seq)
 }
 
 // New creates a Runner and fills default config.
@@ -48,6 +58,9 @@ func New(cfg Config) *Runner {
 	}
 	if cfg.Tracer == nil {
 		cfg.Tracer = &NoopTracer{}
+	}
+	if cfg.RunIDGenerator == nil {
+		cfg.RunIDGenerator = defaultRunIDGenerator
 	}
 	return &Runner{config: cfg}
 }
@@ -72,20 +85,26 @@ func (r *Runner) GetMemory() memory.Store {
 
 // State describes the context of a run turn.
 type State struct {
-	Context context.Context
+	Context  context.Context
 	Agent    *agent.Agent
 	Input    schema.Message
 	Messages []schema.Message
 	Response schema.Message
 	Turn     int
+	RunID    schema.RunID
+	StepID   schema.StepID
+	SpanID   schema.SpanID
 }
 
 // ToolState describes tool call context.
 type ToolState struct {
 	Context context.Context
-	Agent  *agent.Agent
-	Call   *schema.ToolCall
-	Result *schema.ToolResult
+	Agent   *agent.Agent
+	Call    *schema.ToolCall
+	Result  *schema.ToolResult
+	RunID   schema.RunID
+	StepID  schema.StepID
+	SpanID  schema.SpanID
 }
 
 // RunResult carries full execution results.
@@ -141,12 +160,12 @@ type Observer interface {
 // NoopObserver is a default no-op implementation.
 type NoopObserver struct{}
 
-func (o *NoopObserver) OnLLMStart(ctx context.Context, state *State, req *llm.Request)  {}
+func (o *NoopObserver) OnLLMStart(ctx context.Context, state *State, req *llm.Request) {}
 func (o *NoopObserver) OnLLMEnd(ctx context.Context, state *State, resp *llm.Response, err error) {
 }
-func (o *NoopObserver) OnToolCall(ctx context.Context, state *ToolState)  {}
+func (o *NoopObserver) OnToolCall(ctx context.Context, state *ToolState)   {}
 func (o *NoopObserver) OnToolResult(ctx context.Context, state *ToolState) {}
-func (o *NoopObserver) OnError(ctx context.Context, err error)            {}
+func (o *NoopObserver) OnError(ctx context.Context, err error)             {}
 
 // Tracer provides a lightweight tracing interface.
 type Tracer interface {
@@ -178,6 +197,11 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 		return RunResult{}, fmt.Errorf("runner: model is nil")
 	}
 
+	runID := schema.RunID(r.config.RunIDGenerator())
+	if runID == "" {
+		runID = schema.RunID(defaultRunIDGenerator())
+	}
+
 	messages := r.buildInitialMessages(ctx, ag, input)
 	if err := r.config.Memory.Add(ctx, input); err != nil {
 		return RunResult{}, err
@@ -195,12 +219,17 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 	var lastUsage llm.TokenUsage
 
 	for turn := 1; turn <= r.config.MaxTurns; turn++ {
+		stepID := schema.StepID(fmt.Sprintf("%s.step.%d", runID, turn))
+		llmSpanID := schema.SpanID(fmt.Sprintf("%s.llm", stepID))
 		state := &State{
-			Context: ctx,
+			Context:  ctx,
 			Agent:    ag,
 			Input:    input,
 			Messages: messages,
 			Turn:     turn,
+			RunID:    runID,
+			StepID:   stepID,
+			SpanID:   llmSpanID,
 		}
 		if err := r.runBeforeLLM(ctx, state); err != nil {
 			r.config.Observer.OnError(ctx, err)
@@ -215,6 +244,9 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 			"agent_id":   ag.ID(),
 			"agent_name": ag.Name(),
 			"turn":       fmt.Sprintf("%d", turn),
+			"run_id":     string(runID),
+			"step_id":    string(stepID),
+			"span_id":    string(llmSpanID),
 		})
 		state.Context = spanCtx
 		r.config.Observer.OnLLMStart(llmCtx, state, req)
@@ -249,7 +281,7 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 		}
 
 		toolCalls = append(toolCalls, resp.Message.ToolCalls...)
-		toolMessages, results, err := r.executeTools(ctx, registry, ag, resp.Message.ToolCalls)
+		toolMessages, results, err := r.executeTools(ctx, registry, ag, resp.Message.ToolCalls, runID, stepID)
 		if err != nil {
 			r.config.Observer.OnError(ctx, err)
 			return RunResult{}, err
@@ -279,35 +311,45 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 		return nil, fmt.Errorf("runner: model does not support streaming")
 	}
 
+	runID := schema.RunID(r.config.RunIDGenerator())
+	if runID == "" {
+		runID = schema.RunID(defaultRunIDGenerator())
+	}
+
 	out := make(chan schema.StreamEvent, 128)
 	go func() {
 		defer close(out)
 
 		messages := r.buildInitialMessages(ctx, ag, input)
 		if err := r.config.Memory.Add(ctx, input); err != nil {
-			out <- schema.NewErrorEvent(err, ag.ID())
+			out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, "", "")
 			return
 		}
 
 		registry := tools.NewRegistry()
 		for _, t := range ag.Tools() {
 			if err := registry.Register(t); err != nil {
-				out <- schema.NewErrorEvent(err, ag.ID())
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, "", "")
 				return
 			}
 		}
 
 		for turn := 1; turn <= r.config.MaxTurns; turn++ {
+			stepID := schema.StepID(fmt.Sprintf("%s.step.%d", runID, turn))
+			llmSpanID := schema.SpanID(fmt.Sprintf("%s.llm", stepID))
 			state := &State{
-				Context: ctx,
+				Context:  ctx,
 				Agent:    ag,
 				Input:    input,
 				Messages: messages,
 				Turn:     turn,
+				RunID:    runID,
+				StepID:   stepID,
+				SpanID:   llmSpanID,
 			}
 			if err := r.runBeforeLLM(ctx, state); err != nil {
 				r.config.Observer.OnError(ctx, err)
-				out <- schema.NewErrorEvent(err, ag.ID())
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
 				return
 			}
 
@@ -319,6 +361,9 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 				"agent_id":   ag.ID(),
 				"agent_name": ag.Name(),
 				"turn":       fmt.Sprintf("%d", turn),
+				"run_id":     string(runID),
+				"step_id":    string(stepID),
+				"span_id":    string(llmSpanID),
 			})
 			state.Context = spanCtx
 			r.config.Observer.OnLLMStart(llmCtx, state, req)
@@ -328,13 +373,16 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 				r.config.Observer.OnError(llmCtx, err)
 				runCancels(cancels)
 				endSpan(err)
-				out <- schema.NewErrorEvent(err, ag.ID())
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
 				return
 			}
 
 			var finalMessage schema.Message
 			for event := range stream {
-				out <- event
+				if event.AgentID == "" {
+					event.AgentID = ag.ID()
+				}
+				out <- event.WithIDs(runID, stepID, llmSpanID)
 				if event.Type == schema.EventEnd {
 					if msg, ok := event.Data.(schema.Message); ok {
 						finalMessage = msg
@@ -346,7 +394,7 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 			}
 
 			if finalMessage.Role == "" {
-				out <- schema.NewErrorEvent(fmt.Errorf("runner: missing final message"), ag.ID())
+				out <- schema.NewErrorEvent(fmt.Errorf("runner: missing final message"), ag.ID()).WithIDs(runID, stepID, llmSpanID)
 				return
 			}
 
@@ -355,7 +403,7 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 				r.config.Observer.OnError(ctx, err)
 				runCancels(cancels)
 				endSpan(err)
-				out <- schema.NewErrorEvent(err, ag.ID())
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
 				return
 			}
 			r.config.Observer.OnLLMEnd(llmCtx, state, &llm.Response{Message: finalMessage}, nil)
@@ -364,7 +412,7 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 
 			messages = append(messages, finalMessage)
 			if err := r.config.Memory.Add(ctx, finalMessage); err != nil {
-				out <- schema.NewErrorEvent(err, ag.ID())
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
 				return
 			}
 
@@ -372,30 +420,32 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 				return
 			}
 
-			for _, call := range finalMessage.ToolCalls {
-				out <- schema.NewToolCallEvent(call, ag.ID())
+			for i, call := range finalMessage.ToolCalls {
+				spanID := schema.SpanID(fmt.Sprintf("%s.tool.%d", stepID, i))
+				out <- schema.NewToolCallEvent(call, ag.ID()).WithIDs(runID, stepID, spanID)
 			}
 
-			toolMessages, toolResults, err := r.executeTools(ctx, registry, ag, finalMessage.ToolCalls)
+			toolMessages, toolResults, err := r.executeTools(ctx, registry, ag, finalMessage.ToolCalls, runID, stepID)
 			if err != nil {
 				r.config.Observer.OnError(ctx, err)
-				out <- schema.NewErrorEvent(err, ag.ID())
+				out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, "")
 				return
 			}
 
 			for i, toolMsg := range toolMessages {
 				if i < len(toolResults) {
-					out <- schema.NewToolResultEvent(toolResults[i], ag.ID())
+					spanID := schema.SpanID(fmt.Sprintf("%s.tool.%d", stepID, i))
+					out <- schema.NewToolResultEvent(toolResults[i], ag.ID()).WithIDs(runID, stepID, spanID)
 				}
 				messages = append(messages, toolMsg)
 				if err := r.config.Memory.Add(ctx, toolMsg); err != nil {
-					out <- schema.NewErrorEvent(err, ag.ID())
+					out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, "")
 					return
 				}
 			}
 		}
 
-		out <- schema.NewErrorEvent(fmt.Errorf("runner: exceeded max turns %d", r.config.MaxTurns), ag.ID())
+		out <- schema.NewErrorEvent(fmt.Errorf("runner: exceeded max turns %d", r.config.MaxTurns), ag.ID()).WithIDs(runID, "", "")
 	}()
 
 	return out, nil
@@ -454,16 +504,19 @@ func trimHistory(history []schema.Message, window int) []schema.Message {
 	return history[len(history)-window:]
 }
 
-func (r *Runner) executeTools(ctx context.Context, registry *tools.Registry, ag *agent.Agent, calls []schema.ToolCall) ([]schema.Message, []schema.ToolResult, error) {
+func (r *Runner) executeTools(ctx context.Context, registry *tools.Registry, ag *agent.Agent, calls []schema.ToolCall, runID schema.RunID, stepID schema.StepID) ([]schema.Message, []schema.ToolResult, error) {
 	spanCtx, endSpan := r.config.Tracer.StartSpan(ctx, "tool.invoke", map[string]string{
 		"agent_id":   ag.ID(),
 		"agent_name": ag.Name(),
 		"tool_count": fmt.Sprintf("%d", len(calls)),
+		"run_id":     string(runID),
+		"step_id":    string(stepID),
 	})
 	ctx = spanCtx
 
 	for idx := range calls {
-		state := &ToolState{Agent: ag, Call: &calls[idx]}
+		spanID := schema.SpanID(fmt.Sprintf("%s.tool.%d", stepID, idx))
+		state := &ToolState{Agent: ag, Call: &calls[idx], RunID: runID, StepID: stepID, SpanID: spanID}
 		r.config.Observer.OnToolCall(ctx, state)
 		if err := r.runBeforeTool(ctx, state); err != nil {
 			endSpan(err)
@@ -471,7 +524,7 @@ func (r *Runner) executeTools(ctx context.Context, registry *tools.Registry, ag 
 		}
 	}
 
-	toolState := &ToolState{Agent: ag, Context: ctx}
+	toolState := &ToolState{Agent: ag, Context: ctx, RunID: runID, StepID: stepID}
 	toolCtx, cancels := r.applyToolContext(ctx, toolState)
 	toolState.Context = toolCtx
 	defer runCancels(cancels)
@@ -484,7 +537,8 @@ func (r *Runner) executeTools(ctx context.Context, registry *tools.Registry, ag 
 
 	toolMessages := make([]schema.Message, 0, len(results))
 	for idx := range results {
-		state := &ToolState{Agent: ag, Result: &results[idx]}
+		spanID := schema.SpanID(fmt.Sprintf("%s.tool.%d", stepID, idx))
+		state := &ToolState{Agent: ag, Result: &results[idx], RunID: runID, StepID: stepID, SpanID: spanID}
 		if err := r.runAfterTool(ctx, state); err != nil {
 			endSpan(err)
 			return nil, nil, err

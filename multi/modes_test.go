@@ -6,6 +6,7 @@ import (
 
 	"github.com/voocel/mas/agent"
 	"github.com/voocel/mas/llm"
+	"github.com/voocel/mas/memory"
 	"github.com/voocel/mas/runner"
 	"github.com/voocel/mas/schema"
 )
@@ -57,5 +58,34 @@ func TestRunParallel(t *testing.T) {
 	}
 	if resp.Content != "ok" {
 		t.Fatalf("unexpected response: %s", resp.Content)
+	}
+}
+
+func TestRunSequentialSharedMemory(t *testing.T) {
+	r := runner.New(runner.Config{Model: &staticModel{content: "ok"}})
+	a1 := agent.New("a1", "a1")
+	a2 := agent.New("a2", "a2")
+
+	shared := memory.NewBuffer(0)
+	resp, err := RunSequentialWithOptions(
+		context.Background(),
+		r,
+		[]*agent.Agent{a1, a2},
+		schema.Message{Role: schema.RoleUser, Content: "hi"},
+		WithSharedMemory(shared),
+	)
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Fatalf("unexpected response: %s", resp.Content)
+	}
+
+	history, err := shared.History(context.Background())
+	if err != nil {
+		t.Fatalf("history error: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 shared messages, got %d", len(history))
 	}
 }

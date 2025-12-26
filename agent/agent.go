@@ -1,14 +1,19 @@
 package agent
 
-import "github.com/voocel/mas/tools"
+import (
+	"github.com/voocel/mas/guardrail"
+	"github.com/voocel/mas/tools"
+)
 
 // Config defines a lightweight agent configuration.
 type Config struct {
-	ID           string
-	Name         string
-	SystemPrompt string
-	Tools        []tools.Tool
-	Metadata     map[string]interface{}
+	ID              string
+	Name            string
+	SystemPrompt    string
+	Tools           []tools.Tool
+	Metadata        map[string]interface{}
+	InputGuardrails []guardrail.InputGuardrail
+	OutputGuardrails []guardrail.OutputGuardrail
 }
 
 // Agent is a lightweight descriptor and does not execute tools or call models.
@@ -60,4 +65,14 @@ func (a *Agent) Metadata() map[string]interface{} {
 		cp[k] = v
 	}
 	return cp
+}
+
+// InputGuardrails returns the agent's input guardrails.
+func (a *Agent) InputGuardrails() []guardrail.InputGuardrail {
+	return a.config.InputGuardrails
+}
+
+// OutputGuardrails returns the agent's output guardrails.
+func (a *Agent) OutputGuardrails() []guardrail.OutputGuardrail {
+	return a.config.OutputGuardrails
 }

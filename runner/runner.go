@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/voocel/mas/agent"
+	"github.com/voocel/mas/guardrail"
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/memory"
 	"github.com/voocel/mas/schema"
@@ -198,6 +199,12 @@ func (r *Runner) RunWithResult(ctx context.Context, ag *agent.Agent, input schem
 		return RunResult{}, fmt.Errorf("runner: model is nil")
 	}
 
+	// Run input guardrails
+	if err := r.runInputGuardrails(ctx, ag, &input); err != nil {
+		r.config.Observer.OnError(ctx, err)
+		return RunResult{}, err
+	}
+
 	runID := schema.RunID(r.config.RunIDGenerator())
 	if runID == "" {
 		runID = schema.RunID(defaultRunIDGenerator())
@@ -323,6 +330,11 @@ func (r *Runner) runWithState(
 		}
 
 		if !resp.Message.HasToolCalls() {
+			// Run output guardrails before returning
+			if err := r.runOutputGuardrails(ctx, ag, &resp.Message); err != nil {
+				r.config.Observer.OnError(ctx, err)
+				return RunResult{}, err
+			}
 			if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
 				return RunResult{}, err
 			}
@@ -766,6 +778,38 @@ func (r *Runner) runAfterTool(ctx context.Context, state *ToolState) error {
 		if hook, ok := mw.(AfterTool); ok {
 			if err := hook.AfterTool(ctx, state); err != nil {
 				return err
+			}
+		}
+	}
+	return nil
+}
+
+// runInputGuardrails executes all input guardrails for the agent.
+func (r *Runner) runInputGuardrails(ctx context.Context, ag *agent.Agent, input *schema.Message) error {
+	for _, g := range ag.InputGuardrails() {
+		result := g.ValidateInput(ctx, input)
+		if !result.Passed {
+			return &guardrail.GuardrailError{
+				GuardrailName: g.Name(),
+				Type:          "input",
+				Reason:        result.Reason,
+				Details:       result.Details,
+			}
+		}
+	}
+	return nil
+}
+
+// runOutputGuardrails executes all output guardrails for the agent.
+func (r *Runner) runOutputGuardrails(ctx context.Context, ag *agent.Agent, output *schema.Message) error {
+	for _, g := range ag.OutputGuardrails() {
+		result := g.ValidateOutput(ctx, output)
+		if !result.Passed {
+			return &guardrail.GuardrailError{
+				GuardrailName: g.Name(),
+				Type:          "output",
+				Reason:        result.Reason,
+				Details:       result.Details,
 			}
 		}
 	}

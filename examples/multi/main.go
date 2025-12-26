@@ -7,6 +7,7 @@ import (
 
 	"github.com/voocel/mas/agent"
 	"github.com/voocel/mas/llm"
+	"github.com/voocel/mas/memory"
 	"github.com/voocel/mas/multi"
 	"github.com/voocel/mas/runner"
 	"github.com/voocel/mas/schema"
@@ -52,4 +53,22 @@ func main() {
 	}
 
 	fmt.Println(resp.Content)
+
+	shared := memory.NewBuffer(0)
+	sharedResp, err := multi.RunSequentialWithOptions(
+		context.Background(),
+		r,
+		[]*agent.Agent{researcher, writer},
+		schema.Message{
+			Role:    schema.RoleUser,
+			Content: "Summarize Go concurrency for a beginner.",
+		},
+		multi.WithSharedMemory(shared),
+	)
+	if err != nil {
+		fmt.Println("multi error:", err)
+		return
+	}
+
+	fmt.Println(sharedResp.Content)
 }

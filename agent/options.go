@@ -1,6 +1,9 @@
 package agent
 
-import "github.com/voocel/mas/tools"
+import (
+	"github.com/voocel/mas/guardrail"
+	"github.com/voocel/mas/tools"
+)
 
 // Option configures an Agent.
 type Option func(*Config)
@@ -26,5 +29,19 @@ func WithMetadata(key string, value interface{}) Option {
 			cfg.Metadata = make(map[string]interface{})
 		}
 		cfg.Metadata[key] = value
+	}
+}
+
+// WithInputGuardrails attaches input guardrails to the agent.
+func WithInputGuardrails(guardrails ...guardrail.InputGuardrail) Option {
+	return func(cfg *Config) {
+		cfg.InputGuardrails = append(cfg.InputGuardrails, guardrails...)
+	}
+}
+
+// WithOutputGuardrails attaches output guardrails to the agent.
+func WithOutputGuardrails(guardrails ...guardrail.OutputGuardrail) Option {
+	return func(cfg *Config) {
+		cfg.OutputGuardrails = append(cfg.OutputGuardrails, guardrails...)
 	}
 }

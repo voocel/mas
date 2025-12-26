@@ -405,6 +405,12 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 		return nil, fmt.Errorf("runner: model does not support streaming")
 	}
 
+	// Run input guardrails before streaming
+	if err := r.runInputGuardrails(ctx, ag, &input); err != nil {
+		r.config.Observer.OnError(ctx, err)
+		return nil, err
+	}
+
 	runID := schema.RunID(r.config.RunIDGenerator())
 	if runID == "" {
 		runID = schema.RunID(defaultRunIDGenerator())
@@ -521,6 +527,11 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 			}
 
 			if !finalMessage.HasToolCalls() {
+				// Run output guardrails before completing
+				if err := r.runOutputGuardrails(ctx, ag, &finalMessage); err != nil {
+					out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
+					return
+				}
 				if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
 					out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, llmSpanID)
 				}
@@ -566,7 +577,11 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 }
 
 func (r *Runner) buildInitialMessages(ctx context.Context, ag *agent.Agent, input schema.Message) []schema.Message {
-	history, _ := r.config.Memory.History(ctx)
+	history, err := r.config.Memory.History(ctx)
+	if err != nil {
+		r.config.Observer.OnError(ctx, fmt.Errorf("failed to load history: %w", err))
+		history = nil // Continue with empty history
+	}
 	history = trimHistory(history, r.config.HistoryWindow)
 
 	messages := make([]schema.Message, 0, len(history)+2)

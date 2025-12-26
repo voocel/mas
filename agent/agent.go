@@ -7,13 +7,14 @@ import (
 
 // Config defines a lightweight agent configuration.
 type Config struct {
-	ID              string
-	Name            string
-	SystemPrompt    string
-	Tools           []tools.Tool
-	Metadata        map[string]interface{}
-	InputGuardrails []guardrail.InputGuardrail
-	OutputGuardrails []guardrail.OutputGuardrail
+	ID                 string
+	Name               string
+	SystemPrompt       string
+	HandoffDescription string // Description for LLM-driven agent selection
+	Tools              []tools.Tool
+	Metadata           map[string]interface{}
+	InputGuardrails    []guardrail.InputGuardrail
+	OutputGuardrails   []guardrail.OutputGuardrail
 }
 
 // Agent is a lightweight descriptor and does not execute tools or call models.
@@ -75,4 +76,9 @@ func (a *Agent) InputGuardrails() []guardrail.InputGuardrail {
 // OutputGuardrails returns the agent's output guardrails.
 func (a *Agent) OutputGuardrails() []guardrail.OutputGuardrail {
 	return a.config.OutputGuardrails
+}
+
+// HandoffDescription returns the description for LLM-driven agent selection.
+func (a *Agent) HandoffDescription() string {
+	return a.config.HandoffDescription
 }

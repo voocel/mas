@@ -32,6 +32,13 @@ func WithMetadata(key string, value interface{}) Option {
 	}
 }
 
+// WithHandoffDescription sets the description for LLM-driven agent selection.
+func WithHandoffDescription(desc string) Option {
+	return func(cfg *Config) {
+		cfg.HandoffDescription = desc
+	}
+}
+
 // WithInputGuardrails attaches input guardrails to the agent.
 func WithInputGuardrails(guardrails ...guardrail.InputGuardrail) Option {
 	return func(cfg *Config) {

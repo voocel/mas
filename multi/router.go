@@ -1,6 +1,7 @@
 package multi
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -10,7 +11,7 @@ import (
 
 // Router selects an agent based on input.
 type Router interface {
-	Select(input schema.Message, team *Team) (*agent.Agent, error)
+	Select(ctx context.Context, input schema.Message, team *Team) (*agent.Agent, error)
 }
 
 // FixedRouter always returns a fixed agent.
@@ -18,7 +19,7 @@ type FixedRouter struct {
 	Name string
 }
 
-func (r *FixedRouter) Select(_ schema.Message, team *Team) (*agent.Agent, error) {
+func (r *FixedRouter) Select(_ context.Context, _ schema.Message, team *Team) (*agent.Agent, error) {
 	return team.Route(r.Name)
 }
 
@@ -29,7 +30,7 @@ type KeywordRouter struct {
 	CaseSensitive bool
 }
 
-func (r *KeywordRouter) Select(input schema.Message, team *Team) (*agent.Agent, error) {
+func (r *KeywordRouter) Select(_ context.Context, input schema.Message, team *Team) (*agent.Agent, error) {
 	content := input.Content
 	if !r.CaseSensitive {
 		content = strings.ToLower(content)

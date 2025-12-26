@@ -153,7 +153,7 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (json.Ra
 			}
 			content = markdown
 		}
-		content = "```\n" + content + "\n```"
+		// Return markdown as-is, not wrapped in code blocks
 
 	case "html":
 		if strings.Contains(contentType, "text/html") {

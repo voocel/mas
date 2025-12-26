@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/voocel/mas/agent"
+	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/runner"
 	"github.com/voocel/mas/schema"
 )
@@ -141,7 +142,7 @@ func RunHandoff(ctx context.Context, r *runner.Runner, team *Team, router Router
 		if err != nil {
 			return schema.Message{}, err
 		}
-		ag, err := router.Select(current, team)
+		ag, err := router.Select(ctx, current, team)
 		if err != nil {
 			return schema.Message{}, err
 		}
@@ -159,4 +160,50 @@ func RunHandoff(ctx context.Context, r *runner.Runner, team *Team, router Router
 		current = resp
 	}
 	return last, nil
+}
+
+// RunAutoHandoff uses LLM to automatically select the best agent for each step.
+// This is the recommended way to implement intelligent agent collaboration.
+func RunAutoHandoff(ctx context.Context, r *runner.Runner, model llm.ChatModel, team *Team, input schema.Message, opts ...HandoffOption) (schema.Message, error) {
+	if model == nil {
+		return schema.Message{}, fmt.Errorf("multi: model is nil for auto handoff")
+	}
+	if team == nil {
+		return schema.Message{}, fmt.Errorf("multi: team is nil")
+	}
+
+	defaultAgent := ""
+	if len(team.List()) > 0 {
+		defaultAgent = team.List()[0]
+	}
+
+	router := NewLLMRouter(model, defaultAgent)
+	return RunHandoff(ctx, r, team, router, input, opts...)
+}
+
+// RunSingleHandoff uses LLM to select one agent and execute it once.
+// Unlike RunAutoHandoff which may loop, this executes exactly one agent.
+func RunSingleHandoff(ctx context.Context, r *runner.Runner, model llm.ChatModel, team *Team, input schema.Message) (schema.Message, error) {
+	if r == nil {
+		return schema.Message{}, fmt.Errorf("multi: runner is nil")
+	}
+	if model == nil {
+		return schema.Message{}, fmt.Errorf("multi: model is nil")
+	}
+	if team == nil {
+		return schema.Message{}, fmt.Errorf("multi: team is nil")
+	}
+
+	defaultAgent := ""
+	if len(team.List()) > 0 {
+		defaultAgent = team.List()[0]
+	}
+
+	router := NewLLMRouter(model, defaultAgent)
+	ag, err := router.Select(ctx, input, team)
+	if err != nil {
+		return schema.Message{}, err
+	}
+
+	return r.Run(ctx, ag, input)
 }

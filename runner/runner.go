@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/voocel/mas/agent"
+	"github.com/voocel/mas/executor"
 	"github.com/voocel/mas/guardrail"
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/memory"
@@ -19,6 +20,8 @@ type Config struct {
 	Model          llm.ChatModel
 	Memory         memory.Store
 	ToolInvoker    tools.Invoker
+	ToolExecutor   executor.ToolExecutor
+	ExecutorPolicy executor.Policy
 	Middlewares    []Middleware
 	Observer       Observer
 	Tracer         Tracer
@@ -53,7 +56,14 @@ func New(cfg Config) *Runner {
 		cfg.Memory = memory.NewBuffer(cfg.HistoryWindow)
 	}
 	if cfg.ToolInvoker == nil {
-		cfg.ToolInvoker = tools.NewSerialInvoker()
+		if cfg.ToolExecutor != nil {
+			cfg.ToolInvoker = &executor.ExecutorInvoker{
+				Executor: cfg.ToolExecutor,
+				Policy:   cfg.ExecutorPolicy,
+			}
+		} else {
+			cfg.ToolInvoker = tools.NewSerialInvoker()
+		}
 	}
 	if cfg.Observer == nil {
 		cfg.Observer = &NoopObserver{}

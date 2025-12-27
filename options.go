@@ -1,6 +1,7 @@
 package mas
 
 import (
+	"github.com/voocel/mas/executor"
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/memory"
 	"github.com/voocel/mas/runner"
@@ -35,6 +36,20 @@ func WithMemory(store memory.Store) Option {
 func WithToolInvoker(invoker tools.Invoker) Option {
 	return func(opts *options) {
 		opts.ToolInvoker = invoker
+	}
+}
+
+// WithToolExecutor sets the tool executor.
+func WithToolExecutor(exec executor.ToolExecutor) Option {
+	return func(opts *options) {
+		opts.ToolExecutor = exec
+	}
+}
+
+// WithExecutorPolicy sets the executor policy.
+func WithExecutorPolicy(policy executor.Policy) Option {
+	return func(opts *options) {
+		opts.ExecutorPolicy = policy
 	}
 }
 
@@ -99,6 +114,8 @@ type options struct {
 	Tools          []tools.Tool
 	Memory         memory.Store
 	ToolInvoker    tools.Invoker
+	ToolExecutor   executor.ToolExecutor
+	ExecutorPolicy executor.Policy
 	Middlewares    []runner.Middleware
 	Observer       runner.Observer
 	Tracer         runner.Tracer

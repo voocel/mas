@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/voocel/mas/agent"
+	"github.com/voocel/mas/executor"
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/schema"
 	"github.com/voocel/mas/tools"
@@ -79,6 +80,17 @@ func (t *echoTool) Execute(ctx context.Context, input json.RawMessage) (json.Raw
 	return json.Marshal(map[string]string{"echo": payload["text"]})
 }
 
+type fakeExecutor struct {
+	calls []schema.ToolCall
+}
+
+func (f *fakeExecutor) Execute(ctx context.Context, call schema.ToolCall, policy executor.Policy) (schema.ToolResult, error) {
+	f.calls = append(f.calls, call)
+	return schema.ToolResult{ID: call.ID, Result: []byte(`{"ok":true}`)}, nil
+}
+
+func (f *fakeExecutor) Close() error { return nil }
+
 func TestRunnerToolLoop(t *testing.T) {
 	model := &mockModel{}
 	ag := agent.New("a1", "a1", agent.WithTools(newEchoTool()))
@@ -96,6 +108,31 @@ func TestRunnerToolLoop(t *testing.T) {
 	}
 	if model.calls != 2 {
 		t.Fatalf("expected 2 model calls, got %d", model.calls)
+	}
+}
+
+func TestRunnerUsesToolExecutor(t *testing.T) {
+	model := &mockModel{}
+	exec := &fakeExecutor{}
+	ag := agent.New("a1", "a1", agent.WithTools(newEchoTool()))
+
+	r := New(Config{
+		Model:        model,
+		ToolExecutor: exec,
+	})
+
+	resp, err := r.Run(context.Background(), ag, schema.Message{
+		Role:    schema.RoleUser,
+		Content: "start",
+	})
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if resp.Content != "done" {
+		t.Fatalf("unexpected response: %s", resp.Content)
+	}
+	if len(exec.calls) != 1 || exec.calls[0].Name != "echo" {
+		t.Fatalf("expected executor call for echo, got %v", exec.calls)
 	}
 }
 

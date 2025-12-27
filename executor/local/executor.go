@@ -12,6 +12,12 @@ import (
 	"github.com/voocel/mas/schema"
 )
 
+var (
+	ErrInvalidResponse = errors.New("sandboxd invalid response")
+	ErrNonZeroExit     = errors.New("sandboxd non-zero exit code")
+	ErrProcessFailure  = errors.New("sandboxd process failure")
+)
+
 // ProcessRunner starts the local sandbox process and returns its output.
 type ProcessRunner interface {
 	Run(ctx context.Context, path string, args []string, input []byte) ([]byte, []byte, error)
@@ -60,19 +66,24 @@ func (e *LocalExecutor) Execute(ctx context.Context, call schema.ToolCall, polic
 	data = append(data, '\n')
 
 	out, _, err := e.Runner.Run(ctx, path, e.Args, data)
-	if err != nil {
-		return schema.ToolResult{ID: call.ID, Error: err.Error()}, err
-	}
-
-	resp, err := parseResponse(out)
-	if err != nil {
-		return schema.ToolResult{ID: call.ID, Error: err.Error()}, err
+	resp, parseErr := parseResponse(out)
+	if parseErr != nil {
+		if err != nil {
+			return schema.ToolResult{ID: call.ID, Error: err.Error()}, fmt.Errorf("%w: %v", ErrProcessFailure, err)
+		}
+		return schema.ToolResult{ID: call.ID, Error: parseErr.Error()}, parseErr
 	}
 
 	result := schema.ToolResult{ID: call.ID, Result: resp.Result}
 	if resp.Error != "" {
 		result.Error = resp.Error
-		return result, fmt.Errorf("sandboxd: %s", resp.Error)
+		return result, fmt.Errorf("%w: %s", ErrNonZeroExit, resp.Error)
+	}
+	if resp.ExitCode != 0 {
+		return result, fmt.Errorf("%w: %d", ErrNonZeroExit, resp.ExitCode)
+	}
+	if err != nil {
+		return result, fmt.Errorf("%w: %v", ErrProcessFailure, err)
 	}
 	return result, nil
 }
@@ -92,5 +103,5 @@ func parseResponse(data []byte) (*Response, error) {
 			return &resp, nil
 		}
 	}
-	return nil, errors.New("invalid sandboxd response")
+	return nil, ErrInvalidResponse
 }

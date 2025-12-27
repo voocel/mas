@@ -3,6 +3,7 @@ package local_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -48,7 +49,7 @@ func TestLocalExecutor_ErrorResponse(t *testing.T) {
 	resp := local.Response{
 		ID:       "1",
 		Error:    "tool failed",
-		ExitCode: 1,
+		ExitCode: 2,
 		Duration: "1ms",
 	}
 	data, _ := json.Marshal(resp)
@@ -59,6 +60,9 @@ func TestLocalExecutor_ErrorResponse(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+	if !errors.Is(err, local.ErrNonZeroExit) {
+		t.Fatalf("expected ErrNonZeroExit, got %v", err)
+	}
 }
 
 func TestLocalExecutor_InvalidResponse(t *testing.T) {
@@ -67,6 +71,29 @@ func TestLocalExecutor_InvalidResponse(t *testing.T) {
 	_, err := exec.Execute(context.Background(), call, executor.Policy{})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if !errors.Is(err, local.ErrInvalidResponse) {
+		t.Fatalf("expected ErrInvalidResponse, got %v", err)
+	}
+}
+
+func TestLocalExecutor_ProcessFailure(t *testing.T) {
+	resp := local.Response{
+		ID:       "1",
+		Result:   json.RawMessage(`{"ok":true}`),
+		ExitCode: 0,
+		Duration: "1ms",
+	}
+	data, _ := json.Marshal(resp)
+
+	exec := &local.LocalExecutor{Runner: &fakeRunner{stdout: append(data, '\n'), err: errors.New("proc")}}
+	call := schema.ToolCall{ID: "1", Name: "calc", Args: json.RawMessage(`{}`)}
+	_, err := exec.Execute(context.Background(), call, executor.Policy{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, local.ErrProcessFailure) {
+		t.Fatalf("expected ErrProcessFailure, got %v", err)
 	}
 }
 

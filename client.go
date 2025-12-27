@@ -43,6 +43,8 @@ func NewClient(model llm.ChatModel, opts ...Option) (*Client, error) {
 		Model:          model,
 		Memory:         common.Memory,
 		ToolInvoker:    common.ToolInvoker,
+		ToolExecutor:   common.ToolExecutor,
+		ExecutorPolicy: common.ExecutorPolicy,
 		Middlewares:    common.Middlewares,
 		Observer:       common.Observer,
 		Tracer:         common.Tracer,

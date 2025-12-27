@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/voocel/mas/executor"
@@ -54,9 +58,9 @@ func main() {
 			_ = encoder.Encode(resp)
 			continue
 		}
-		if !isToolAllowed(req.Policy, tool) {
+		if err := validateToolPolicy(req, tool); err != nil {
 			resp.ExitCode = 1
-			resp.Error = "tool not allowed"
+			resp.Error = err.Error()
 			resp.Duration = time.Since(start).String()
 			_ = encoder.Encode(resp)
 			continue
@@ -74,12 +78,34 @@ func main() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "sandboxd read error:", err)
+		fmt.Fprintln(os.Stderr, "sandbox read error:", err)
 	}
 }
 
 func registerBuiltinTools(registry *tools.Registry) {
 	_ = registry.Register(builtin.NewCalculator())
+	_ = registry.Register(builtin.NewFileSystemTool(nil, 0))
+	_ = registry.Register(builtin.NewHTTPClientTool(0))
+	_ = registry.Register(builtin.NewWebSearchTool(""))
+	_ = registry.Register(builtin.NewFetchTool(0))
+}
+
+func validateToolPolicy(req local.Request, tool tools.Tool) error {
+	if !isToolAllowed(req.Policy, tool) {
+		return errors.New("tool not allowed")
+	}
+	if !req.Policy.Network.Enabled && hasCapability(tool, tools.CapabilityNetwork) {
+		return errors.New("network disabled")
+	}
+	if tool.Name() == "file_system" {
+		return validateFileAccess(req.Policy, req.Args)
+	}
+	if hasCapability(tool, tools.CapabilityNetwork) && len(req.Policy.Network.AllowedHosts) > 0 {
+		if err := validateURLHosts(req.Policy.Network.AllowedHosts, req.Args); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isToolAllowed(policy executor.Policy, tool tools.Tool) bool {
@@ -115,4 +141,86 @@ func isToolAllowed(policy executor.Policy, tool tools.Tool) bool {
 		}
 	}
 	return false
+}
+
+func hasCapability(tool tools.Tool, cap tools.Capability) bool {
+	for _, c := range tool.Capabilities() {
+		if c == cap {
+			return true
+		}
+	}
+	return false
+}
+
+func validateFileAccess(policy executor.Policy, args json.RawMessage) error {
+	path := extractPath(args)
+	if path == "" {
+		return errors.New("path is required")
+	}
+
+	allowed := append([]string{}, policy.AllowedPaths...)
+	if policy.Workdir != "" {
+		allowed = append(allowed, policy.Workdir)
+	}
+	if len(allowed) == 0 {
+		return errors.New("path not allowed")
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return errors.New("invalid path")
+	}
+	absPath = filepath.Clean(absPath)
+
+	for _, p := range allowed {
+		absAllowed, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		absAllowed = filepath.Clean(absAllowed)
+		if absPath == absAllowed || strings.HasPrefix(absPath, absAllowed+string(os.PathSeparator)) {
+			return nil
+		}
+	}
+	return errors.New("path not allowed")
+}
+
+func validateURLHosts(allowed []string, args json.RawMessage) error {
+	rawURL := extractURL(args)
+	if rawURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return errors.New("invalid url")
+	}
+	host := parsed.Hostname()
+	for _, allowedHost := range allowed {
+		if host == allowedHost {
+			return nil
+		}
+	}
+	return errors.New("host not allowed")
+}
+
+func extractPath(args json.RawMessage) string {
+	var payload map[string]any
+	if err := json.Unmarshal(args, &payload); err != nil {
+		return ""
+	}
+	if value, ok := payload["path"].(string); ok {
+		return value
+	}
+	return ""
+}
+
+func extractURL(args json.RawMessage) string {
+	var payload map[string]any
+	if err := json.Unmarshal(args, &payload); err != nil {
+		return ""
+	}
+	if value, ok := payload["url"].(string); ok {
+		return value
+	}
+	return ""
 }

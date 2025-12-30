@@ -308,23 +308,53 @@ func (t *FileSystemTool) isPathAllowed(path string) bool {
 		return true
 	}
 
-	absPath, err := filepath.Abs(path)
+	absPath, err := resolvePath(path)
 	if err != nil {
 		return false
 	}
-	absPath = filepath.Clean(absPath)
 
 	for _, allowedPath := range t.allowedPaths {
-		absAllowed, err := filepath.Abs(allowedPath)
+		absAllowed, err := resolvePath(allowedPath)
 		if err != nil {
 			continue
 		}
-		absAllowed = filepath.Clean(absAllowed)
 		if absPath == absAllowed || strings.HasPrefix(absPath, absAllowed+string(os.PathSeparator)) {
 			return true
 		}
 	}
 	return false
+}
+
+func resolvePath(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	absPath = filepath.Clean(absPath)
+
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		return resolved, nil
+	}
+
+	dir := absPath
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		if _, statErr := os.Stat(dir); statErr == nil {
+			resolved, err := filepath.EvalSymlinks(dir)
+			if err == nil {
+				rel, relErr := filepath.Rel(dir, absPath)
+				if relErr == nil && rel != "." {
+					return filepath.Join(resolved, rel), nil
+				}
+				return resolved, nil
+			}
+		}
+		dir = parent
+	}
+	return absPath, nil
 }
 
 // ExecuteAsync executes asynchronously.

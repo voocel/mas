@@ -1,0 +1,33 @@
+{
+  "firecracker_bin": "/usr/local/bin/firecracker",
+  "kernel_image": "/var/lib/mas/kernel/vmlinux",
+  "rootfs": "/var/lib/mas/rootfs.ext4",
+  "snapshot": "",
+  "api_socket": "/tmp/firecracker-{id}.sock",
+  "log_path": "/tmp/firecracker-{id}.log",
+  "metrics_path": "/tmp/firecracker-{id}.metrics",
+  "boot_args": "console=ttyS0 reboot=k panic=1 pci=off",
+  "machine": {
+    "vcpu_count": 1,
+    "mem_mib": 512
+  },
+  "vsock": {
+    "cid": 3,
+    "port": 5000,
+    "uds_path": "/tmp/firecracker-{id}.vsock"
+  },
+  "tool_runner": {
+    "command": "/usr/local/bin/mas-toolrunner-client",
+    "args": [
+      "--vsock",
+      "{vsock_uds}"
+    ]
+  },
+  "network": {
+    "enabled": true,
+    "tap_device": "tap{id}"
+  },
+  "pool": {
+    "size": 2
+  }
+}

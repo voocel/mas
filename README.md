@@ -1,11 +1,23 @@
 # MAS
 
-MAS is a lightweight, pluggable Go multi‑agent SDK focused on simplicity and composability.
+**MAS** (Multi-Agent System) is a lightweight, elegant Go SDK for building powerful multi-agent systems with minimal complexity.
 
-- **Lightweight**: an Agent is just a description (prompt + tools)
-- **Pluggable**: the Runner owns the execution loop and can be customized
-- **Easy to start**: 3–5 lines to run a single agent
+> *Build production-ready AI agents in Go — simple to start, powerful to scale.*
 
+### Positioning
+
+- **Lightweight Core, Powerful Kernel**: Minimal API surface with strong execution and policy control.
+- **Easy to Embed**: Designed to integrate into existing systems without heavy frameworks.
+- **Policy-Driven Governance**: Tool, file, and network access can be explicitly controlled.
+- **Extensible by Design**: Pluggable tools, transports, and runtimes.
+- **Clear Boundary**: Not an OS-level sandbox; focuses on controllable execution and policy governance.
+
+### Design Philosophy
+
+- **Agent as Descriptor**: Agents hold configuration (prompt, tools, metadata) — no execution logic, no state management
+- **Runner-Driven Execution**: The Runner controls the execution loop; agents remain passive
+- **Explicit over Implicit**: No hidden state — execution flow is fully observable
+- **Minimal API Surface**: 3 lines for core scenarios, advanced capabilities compose on demand
 
 [Examples](./examples/) | [Chinese](./README_CN.md)
 
@@ -126,6 +138,15 @@ ag, _ := team.Route("researcher")
 resp, _ := runner.Run(ctx, ag, msg)
 ```
 
+By default, multi‑agent runs are memory‑isolated per agent. To share minimal context (final outputs only), pass a shared memory store:
+
+```go
+shared := memory.NewBuffer(0)
+resp, _ := multi.RunSequentialWithOptions(ctx, r, []*agent.Agent{researcher, writer}, msg,
+    multi.WithSharedMemory(shared),
+)
+```
+
 ## Collaboration Modes (Light but Powerful)
 
 ```go
@@ -206,6 +227,13 @@ ag, _ := router.Select(msg, team)
 - **Runner**: drives the execution loop (LLM → tools → feedback)
 - **Tool**: independent capability with optional side‑effect flags
 - **Memory**: conversation store (in‑memory window by default)
+  - System prompts are injected by Runner at build time and are not stored in Memory.
+
+## Tool Execution Layer (Executor)
+
+- `executor` provides ToolExecutor abstraction and Policy for tool execution/runtime integration.
+- `mas-sandboxd` is a control-plane harness (protocol + execution framework only; no OS-level isolation).
+- For detailed sandbox flow, setup, and examples: [executor/sandbox/README.md](executor/sandbox/README.md).
 
 ## License
 

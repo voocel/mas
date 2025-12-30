@@ -5,36 +5,10 @@ import (
 	"testing"
 
 	"github.com/voocel/mas/executor"
-	"github.com/voocel/mas/executor/local"
+	"github.com/voocel/mas/executor/sandbox/policy"
 	"github.com/voocel/mas/tools"
 	"github.com/voocel/mas/tools/builtin"
 )
-
-func TestIsToolAllowed(t *testing.T) {
-	calc := builtin.NewCalculator()
-	httpTool := builtin.NewHTTPClientTool(0)
-
-	tests := []struct {
-		name   string
-		policy executor.Policy
-		tool   tools.Tool
-		want   bool
-	}{
-		{"no policy", executor.Policy{}, calc, true},
-		{"tool not in allowlist", executor.Policy{AllowedTools: []string{"http_client"}}, calc, false},
-		{"tool in allowlist", executor.Policy{AllowedTools: []string{"calculator"}}, calc, true},
-		{"caps required but none", executor.Policy{AllowedCaps: []tools.Capability{tools.CapabilityNetwork}}, calc, false},
-		{"caps match", executor.Policy{AllowedCaps: []tools.Capability{tools.CapabilityNetwork}}, httpTool, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isToolAllowed(tt.policy, tt.tool); got != tt.want {
-				t.Fatalf("isToolAllowed() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestValidateToolPolicy(t *testing.T) {
 	calc := builtin.NewCalculator()
@@ -43,69 +17,89 @@ func TestValidateToolPolicy(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		req     local.Request
+		policy  executor.Policy
 		tool    tools.Tool
+		args    json.RawMessage
 		wantErr bool
 	}{
 		{
-			name: "network disabled",
-			req: local.Request{
-				Policy: executor.Policy{Network: executor.NetworkPolicy{Enabled: false}},
-				Args:   json.RawMessage(`{"url":"https://example.com"}`),
-			},
-			tool:    httpTool,
-			wantErr: true,
-		},
-		{
-			name: "file path denied",
-			req: local.Request{
-				Policy: executor.Policy{AllowedPaths: []string{"/tmp/allowed"}},
-				Args:   json.RawMessage(`{"action":"read","path":"/etc/passwd"}`),
-			},
-			tool:    fileTool,
-			wantErr: true,
-		},
-		{
-			name: "file path allowed",
-			req: local.Request{
-				Policy: executor.Policy{AllowedPaths: []string{"/tmp"}},
-				Args:   json.RawMessage(`{"action":"read","path":"/tmp/file.txt"}`),
-			},
-			tool:    fileTool,
-			wantErr: false,
-		},
-		{
-			name: "host allowed",
-			req: local.Request{
-				Policy: executor.Policy{Network: executor.NetworkPolicy{Enabled: true, AllowedHosts: []string{"example.com"}}},
-				Args:   json.RawMessage(`{"url":"https://example.com/path"}`),
-			},
-			tool:    httpTool,
-			wantErr: false,
-		},
-		{
-			name: "host denied",
-			req: local.Request{
-				Policy: executor.Policy{Network: executor.NetworkPolicy{Enabled: true, AllowedHosts: []string{"example.com"}}},
-				Args:   json.RawMessage(`{"url":"https://other.com/path"}`),
-			},
-			tool:    httpTool,
-			wantErr: true,
-		},
-		{
-			name: "calculator ok",
-			req: local.Request{
-				Policy: executor.Policy{},
-				Args:   json.RawMessage(`{"expression":"1+1"}`),
-			},
+			name:    "tool not in allowlist",
+			policy:  executor.Policy{AllowedTools: []string{"http_client"}},
 			tool:    calc,
+			args:    json.RawMessage(`{"expression":"1+1"}`),
+			wantErr: true,
+		},
+		{
+			name:    "tool in allowlist",
+			policy:  executor.Policy{AllowedTools: []string{"calculator"}},
+			tool:    calc,
+			args:    json.RawMessage(`{"expression":"1+1"}`),
 			wantErr: false,
+		},
+		{
+			name:    "caps required but none",
+			policy:  executor.Policy{AllowedCaps: []tools.Capability{tools.CapabilityNetwork}},
+			tool:    calc,
+			args:    json.RawMessage(`{"expression":"1+1"}`),
+			wantErr: true,
+		},
+		{
+			name: "caps match",
+			policy: executor.Policy{
+				AllowedCaps: []tools.Capability{tools.CapabilityNetwork},
+				Network:     executor.NetworkPolicy{Enabled: true},
+			},
+			tool:    httpTool,
+			args:    json.RawMessage(`{"url":"https://example.com"}`),
+			wantErr: false,
+		},
+		{
+			name:    "caps mismatch",
+			policy:  executor.Policy{AllowedCaps: []tools.Capability{tools.CapabilityFile}, Network: executor.NetworkPolicy{Enabled: true}},
+			tool:    httpTool,
+			args:    json.RawMessage(`{"url":"https://example.com"}`),
+			wantErr: true,
+		},
+		{
+			name:    "network disabled",
+			policy:  executor.Policy{Network: executor.NetworkPolicy{Enabled: false}},
+			tool:    httpTool,
+			args:    json.RawMessage(`{"url":"https://example.com"}`),
+			wantErr: true,
+		},
+		{
+			name:    "file path denied",
+			policy:  executor.Policy{AllowedPaths: []string{"/tmp/allowed"}},
+			tool:    fileTool,
+			args:    json.RawMessage(`{"action":"read","path":"/etc/passwd"}`),
+			wantErr: true,
+		},
+		{
+			name:    "file path allowed",
+			policy:  executor.Policy{AllowedPaths: []string{"/tmp"}},
+			tool:    fileTool,
+			args:    json.RawMessage(`{"action":"read","path":"/tmp/file.txt"}`),
+			wantErr: false,
+		},
+		{
+			name:    "host allowed",
+			policy:  executor.Policy{Network: executor.NetworkPolicy{Enabled: true, AllowedHosts: []string{"example.com"}}},
+			tool:    httpTool,
+			args:    json.RawMessage(`{"url":"https://example.com/path"}`),
+			wantErr: false,
+		},
+		{
+			name:    "host denied",
+			policy:  executor.Policy{Network: executor.NetworkPolicy{Enabled: true, AllowedHosts: []string{"example.com"}}},
+			tool:    httpTool,
+			args:    json.RawMessage(`{"url":"https://other.com/path"}`),
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateToolPolicy(tt.req, tt.tool)
+			err := policy.ValidateToolPolicy(tt.policy, tt.tool, tt.args)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validateToolPolicy() err=%v wantErr=%v", err, tt.wantErr)
 			}

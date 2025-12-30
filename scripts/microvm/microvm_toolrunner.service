@@ -1,0 +1,12 @@
+[Unit]
+Description=MAS Tool Runner (vsock)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mas-toolrunner --port 5000
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

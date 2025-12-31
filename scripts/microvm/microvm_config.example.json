@@ -25,7 +25,25 @@
   },
   "network": {
     "enabled": true,
-    "tap_device": "tap{id}"
+    "tap_device": "tap{id}",
+    "allowed_cidrs": [
+      "203.0.113.0/24"
+    ]
+  },
+  "drives": [
+    {
+      "id": "data",
+      "path": "/var/lib/mas/drives/data.ext4",
+      "read_only": true
+    }
+  ],
+  "cgroup": {
+    "path": "/sys/fs/cgroup/mas/microvm",
+    "cpu_quota_us": 50000,
+    "cpu_period_us": 100000,
+    "cpu_weight": 100,
+    "memory_max_bytes": 536870912,
+    "pids_max": 512
   },
   "pool": {
     "size": 2

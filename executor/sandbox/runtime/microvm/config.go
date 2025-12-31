@@ -7,9 +7,10 @@ import (
 )
 
 type NetworkConfig struct {
-	Enabled    bool   `json:"enabled"`
-	TapDevice  string `json:"tap_device"`
-	MacAddress string `json:"mac_address"`
+	Enabled      bool     `json:"enabled"`
+	TapDevice    string   `json:"tap_device"`
+	MacAddress   string   `json:"mac_address"`
+	AllowedCIDRs []string `json:"allowed_cidrs"`
 }
 
 type PoolConfig struct {
@@ -32,6 +33,21 @@ type ToolRunnerConfig struct {
 	Args    []string `json:"args"`
 }
 
+type CgroupConfig struct {
+	Path           string `json:"path"`
+	CPUQuotaUs     int64  `json:"cpu_quota_us"`
+	CPUPeriodUs    int64  `json:"cpu_period_us"`
+	CPUWeight      int    `json:"cpu_weight"`
+	MemoryMaxBytes int64  `json:"memory_max_bytes"`
+	PidsMax        int    `json:"pids_max"`
+}
+
+type DriveConfig struct {
+	ID       string `json:"id"`
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"read_only"`
+}
+
 type Config struct {
 	FirecrackerBin string           `json:"firecracker_bin"`
 	KernelImage    string           `json:"kernel_image"`
@@ -46,6 +62,8 @@ type Config struct {
 	ToolRunner     ToolRunnerConfig `json:"tool_runner"`
 	Network        NetworkConfig    `json:"network"`
 	Pool           PoolConfig       `json:"pool"`
+	Cgroup         CgroupConfig     `json:"cgroup"`
+	Drives         []DriveConfig    `json:"drives"`
 }
 
 func LoadConfig(path string) (Config, error) {

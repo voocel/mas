@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -355,6 +356,7 @@ type vmInstance struct {
 	workdir   string
 	process   *os.Process
 	client    *fcClient
+	netRules  []iptablesRule
 }
 
 func startVM(ctx context.Context, cfg Config) (*vmInstance, error) {
@@ -393,6 +395,11 @@ func startVM(ctx context.Context, cfg Config) (*vmInstance, error) {
 		cleanup()
 		return nil, err
 	}
+	if err := applyCgroup(cfg.Cgroup, cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		cleanup()
+		return nil, err
+	}
 
 	if err := waitForSocket(ctx, apiSock); err != nil {
 		_ = cmd.Process.Kill()
@@ -406,6 +413,7 @@ func startVM(ctx context.Context, cfg Config) (*vmInstance, error) {
 	instanceCfg.MetricsPath = metricsPath
 	instanceCfg.VSock.UDSPath = expandPath(cfg.VSock.UDSPath, instanceID)
 	instanceCfg.Network.TapDevice = expandPath(cfg.Network.TapDevice, instanceID)
+	instanceCfg.Drives = expandDrivePaths(cfg.Drives, instanceID)
 
 	client := newFCClient(apiSock)
 	if err := client.configure(instanceCfg); err != nil {
@@ -413,8 +421,15 @@ func startVM(ctx context.Context, cfg Config) (*vmInstance, error) {
 		cleanup()
 		return nil, err
 	}
+	netRules, err := applyNetworkPolicy(instanceCfg.Network, instanceCfg.Network.TapDevice, instanceID)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		cleanup()
+		return nil, err
+	}
 	if err := client.startInstance(); err != nil {
 		_ = cmd.Process.Kill()
+		_ = removeIptablesRules(netRules)
 		cleanup()
 		return nil, err
 	}
@@ -426,6 +441,7 @@ func startVM(ctx context.Context, cfg Config) (*vmInstance, error) {
 		workdir:   workdir,
 		process:   cmd.Process,
 		client:    client,
+		netRules:  netRules,
 	}
 	return vm, nil
 }
@@ -439,6 +455,7 @@ func stopVM(vm *vmInstance) error {
 	if vm.workdir != "" {
 		_ = os.RemoveAll(vm.workdir)
 	}
+	_ = removeIptablesRules(vm.netRules)
 	return nil
 }
 
@@ -460,6 +477,62 @@ func waitForSocket(ctx context.Context, path string) error {
 			}
 		}
 	}
+}
+
+func applyCgroup(cfg CgroupConfig, pid int) error {
+	if strings.TrimSpace(cfg.Path) == "" {
+		return nil
+	}
+	if pid <= 0 {
+		return errors.New("invalid pid for cgroup")
+	}
+	path, err := normalizeCgroupPath(cfg.Path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return err
+	}
+	if cfg.CPUWeight > 0 {
+		if err := writeCgroupFile(path, "cpu.weight", fmt.Sprintf("%d", cfg.CPUWeight)); err != nil {
+			return err
+		}
+	}
+	if cfg.CPUQuotaUs > 0 {
+		period := cfg.CPUPeriodUs
+		if period <= 0 {
+			period = 100000
+		}
+		if err := writeCgroupFile(path, "cpu.max", fmt.Sprintf("%d %d", cfg.CPUQuotaUs, period)); err != nil {
+			return err
+		}
+	}
+	if cfg.MemoryMaxBytes > 0 {
+		if err := writeCgroupFile(path, "memory.max", fmt.Sprintf("%d", cfg.MemoryMaxBytes)); err != nil {
+			return err
+		}
+	}
+	if cfg.PidsMax > 0 {
+		if err := writeCgroupFile(path, "pids.max", fmt.Sprintf("%d", cfg.PidsMax)); err != nil {
+			return err
+		}
+	}
+	return writeCgroupFile(path, "cgroup.procs", fmt.Sprintf("%d", pid))
+}
+
+func normalizeCgroupPath(path string) (string, error) {
+	if _, err := os.Stat("/sys/fs/cgroup/cgroup.controllers"); err != nil {
+		return "", errors.New("cgroup v2 is required")
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	return filepath.Join("/sys/fs/cgroup", filepath.Clean(path)), nil
+}
+
+func writeCgroupFile(dir, name, value string) error {
+	filePath := filepath.Join(dir, name)
+	return os.WriteFile(filePath, []byte(value), 0644)
 }
 
 type fcClient struct {
@@ -503,6 +576,16 @@ func (c *fcClient) configure(cfg Config) error {
 		"is_read_only":   true,
 	}); err != nil {
 		return err
+	}
+	for _, drive := range cfg.Drives {
+		if err := c.put("/drives/"+drive.ID, map[string]any{
+			"drive_id":       drive.ID,
+			"path_on_host":   drive.Path,
+			"is_root_device": false,
+			"is_read_only":   drive.ReadOnly,
+		}); err != nil {
+			return err
+		}
 	}
 	if cfg.Network.Enabled {
 		if err := c.put("/network-interfaces/eth0", networkPayload(cfg)); err != nil {
@@ -601,6 +684,18 @@ func expandPath(value, instanceID string) string {
 	return strings.ReplaceAll(value, "{id}", instanceID)
 }
 
+func expandDrivePaths(drives []DriveConfig, instanceID string) []DriveConfig {
+	if len(drives) == 0 {
+		return nil
+	}
+	out := make([]DriveConfig, 0, len(drives))
+	for _, drive := range drives {
+		drive.Path = expandPath(drive.Path, instanceID)
+		out = append(out, drive)
+	}
+	return out
+}
+
 func normalizeConfig(cfg Config) (Config, error) {
 	if cfg.Machine.VCPUCount == 0 {
 		cfg.Machine.VCPUCount = 1
@@ -634,6 +729,27 @@ func validateConfig(cfg Config) error {
 		if cfg.Network.Enabled && !strings.Contains(cfg.Network.TapDevice, "{id}") {
 			return errors.New("network.tap_device must include {id} when pool.size > 1")
 		}
+		for _, drive := range cfg.Drives {
+			if !drive.ReadOnly && !strings.Contains(drive.Path, "{id}") {
+				return errors.New("drive.path must include {id} for read-write drives when pool.size > 1")
+			}
+		}
+	}
+	driveIDs := make(map[string]struct{}, len(cfg.Drives))
+	for _, drive := range cfg.Drives {
+		if strings.TrimSpace(drive.ID) == "" {
+			return errors.New("drive.id is required")
+		}
+		if drive.ID == "rootfs" {
+			return errors.New("drive.id cannot be rootfs")
+		}
+		if strings.TrimSpace(drive.Path) == "" {
+			return errors.New("drive.path is required")
+		}
+		if _, ok := driveIDs[drive.ID]; ok {
+			return errors.New("drive.id must be unique")
+		}
+		driveIDs[drive.ID] = struct{}{}
 	}
 	return nil
 }
@@ -641,6 +757,11 @@ func validateConfig(cfg Config) error {
 func validatePolicy(cfg Config, req sandbox.ExecuteToolRequest) error {
 	if req.Policy.Network.Enabled && !cfg.Network.Enabled {
 		return errors.New("network is disabled by runtime")
+	}
+	if len(cfg.Network.AllowedCIDRs) > 0 && len(req.Policy.Network.AllowedHosts) > 0 {
+		if err := validateHostsWithinCIDRs(req.Policy.Network.AllowedHosts, cfg.Network.AllowedCIDRs); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -663,4 +784,175 @@ func networkPayload(cfg Config) map[string]any {
 		payload["guest_mac"] = cfg.Network.MacAddress
 	}
 	return payload
+}
+
+type iptablesRule struct {
+	args []string
+}
+
+func applyNetworkPolicy(cfg NetworkConfig, tapDevice, instanceID string) ([]iptablesRule, error) {
+	if !cfg.Enabled || len(cfg.AllowedCIDRs) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(tapDevice) == "" {
+		return nil, errors.New("tap_device is required for network policy")
+	}
+	if _, err := parseCIDRs(cfg.AllowedCIDRs); err != nil {
+		return nil, err
+	}
+	if _, err := exec.LookPath("iptables"); err != nil {
+		return nil, errors.New("iptables is required for network policy")
+	}
+	comment := fmt.Sprintf("mas-microvm-%s", instanceID)
+	rules := buildIptablesRules(tapDevice, cfg.AllowedCIDRs, comment)
+	applied := make([]iptablesRule, 0, len(rules))
+	for _, rule := range rules {
+		if err := runIptables(rule.args); err != nil {
+			_ = removeIptablesRules(applied)
+			return nil, err
+		}
+		applied = append(applied, rule)
+	}
+	return applied, nil
+}
+
+func buildIptablesRules(tapDevice string, cidrs []string, comment string) []iptablesRule {
+	rules := make([]iptablesRule, 0, len(cidrs)+2)
+	rules = append(rules, iptablesRule{args: []string{
+		"-I", "FORWARD", "-i", tapDevice, "-j", "DROP",
+		"-m", "comment", "--comment", comment,
+	}})
+	for _, cidr := range cidrs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		rules = append(rules, iptablesRule{args: []string{
+			"-I", "FORWARD", "-i", tapDevice, "-d", cidr, "-j", "ACCEPT",
+			"-m", "comment", "--comment", comment,
+		}})
+	}
+	rules = append(rules, iptablesRule{args: []string{
+		"-I", "FORWARD", "-o", tapDevice, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT",
+		"-m", "comment", "--comment", comment,
+	}})
+	return rules
+}
+
+func removeIptablesRules(rules []iptablesRule) error {
+	var firstErr error
+	for i := len(rules) - 1; i >= 0; i-- {
+		rule := rules[i]
+		args := make([]string, len(rule.args))
+		copy(args, rule.args)
+		if len(args) > 0 && args[0] == "-I" {
+			args[0] = "-D"
+		}
+		if err := runIptables(args); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func runIptables(args []string) error {
+	cmd := exec.Command("iptables", append([]string{"-w"}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables error: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func validateHostsWithinCIDRs(hosts []string, cidrs []string) error {
+	nets, err := parseCIDRs(cidrs)
+	if err != nil {
+		return err
+	}
+	for _, host := range hosts {
+		normalized, err := normalizeHost(host)
+		if err != nil {
+			return errors.New("host not allowed")
+		}
+		ips, err := resolveHostIPs(normalized)
+		if err != nil || len(ips) == 0 {
+			return errors.New("host not allowed")
+		}
+		for _, ip := range ips {
+			if !ipInCIDRs(ip, nets) {
+				return errors.New("host not allowed")
+			}
+		}
+	}
+	return nil
+}
+
+func resolveHostIPs(host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+	return net.LookupIP(host)
+}
+
+func normalizeHost(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("empty host")
+	}
+	if strings.Contains(raw, "://") {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Hostname() == "" {
+			return "", errors.New("invalid host")
+		}
+		return parsed.Hostname(), nil
+	}
+	if strings.Contains(raw, "/") {
+		raw = strings.SplitN(raw, "/", 2)[0]
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		return host, nil
+	}
+	if strings.HasPrefix(raw, "[") && strings.Contains(raw, "]") {
+		raw = strings.TrimPrefix(raw, "[")
+		raw = strings.SplitN(raw, "]", 2)[0]
+	}
+	return raw, nil
+}
+
+func parseCIDRs(cidrs []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		if strings.Contains(cidr, "/") {
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				return nil, errors.New("invalid cidr")
+			}
+			nets = append(nets, ipNet)
+			continue
+		}
+		if ip := net.ParseIP(cidr); ip != nil {
+			bits := 128
+			if ip.To4() != nil {
+				bits = 32
+			}
+			mask := net.CIDRMask(bits, bits)
+			nets = append(nets, &net.IPNet{IP: ip, Mask: mask})
+			continue
+		}
+		return nil, errors.New("invalid cidr")
+	}
+	return nets, nil
+}
+
+func ipInCIDRs(ip net.IP, nets []*net.IPNet) bool {
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

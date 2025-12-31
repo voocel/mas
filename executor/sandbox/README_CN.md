@@ -1,6 +1,4 @@
-# Sandbox 使用与架构（中文）
-
-本仓库的 sandbox 相关说明以**中英文两份**为准，其余文档均为跳转或存档。
+# Sandbox 使用与架构
 
 ---
 
@@ -119,11 +117,17 @@ mas-sandboxd -listen :8080 -runtime local
 - `vsock.cid / port / uds_path`
 - `tool_runner.command`（宿主机侧调用器）
 - `network.tap_device`（启用网络时必填）
+- `network.allowed_cidrs`（可选：启用后在宿主机侧强制出站白名单）
+- `drives`（可选：宿主机磁盘镜像白名单）
+- `cgroup.path / cpu_quota_us / memory_max_bytes`（可选：硬限制）
 - `pool.size`（>1 时需 `{id}` 占位符）
 
 **注意：**
 - `tool_runner.command` 是 **宿主机** 的 `mas-toolrunner-client`
 - `mas-toolrunner` 在 **VM 内**运行（由 rootfs 自启）
+- `cgroup` 需要宿主机 cgroup v2 和足够权限（通常需 root）
+- `network.allowed_cidrs` 需要宿主机 iptables（通常需 root），并且只对 IP/CIDR 生效
+- `drives` 仅挂载磁盘镜像（ext4），需要在 rootfs 内自行挂载
 
 ---
 

@@ -1,6 +1,4 @@
-# Sandbox Usage & Architecture (English)
-
-This is the English version of the sandbox documentation. The Chinese version is `executor/sandbox/README_CN.md`.
+# Sandbox Usage & Architecture
 
 ---
 
@@ -119,11 +117,17 @@ Key fields:
 - `vsock.cid / port / uds_path`
 - `tool_runner.command` (host-side caller)
 - `network.tap_device` (required when network enabled)
+- `network.allowed_cidrs` (optional: host-enforced egress allowlist)
+- `drives` (optional: host disk image allowlist)
+- `cgroup.path / cpu_quota_us / memory_max_bytes` (optional: hard limits)
 - `pool.size` (when > 1, `{id}` placeholders are required)
 
 **Notes:**
 - `tool_runner.command` is the host `mas-toolrunner-client`
 - `mas-toolrunner` runs inside the VM (auto-started by rootfs)
+- `cgroup` requires host cgroup v2 and sufficient privileges (usually root)
+- `network.allowed_cidrs` requires host iptables (usually root) and only supports IP/CIDR
+- `drives` only attaches disk images (ext4); mount inside the rootfs is your responsibility
 
 ---
 
@@ -186,7 +190,7 @@ scripts/microvm/microvm_e2e.sh
 
 - Enforced network allowlist (currently validation only)
 - Host filesystem allowlist mounting (microVM only sees VM paths today)
-- Resource limits (CPU/memory/IO)
+- Resource limits beyond cgroup + vCPU/mem (e.g., IO throttling)
 - Full production E2E validation
 
 ---

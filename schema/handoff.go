@@ -2,6 +2,7 @@ package schema
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -10,6 +11,12 @@ import (
 type Handoff struct {
 	// Target is the destination agent or node name
 	Target string `json:"target"`
+
+	// Reason explains why the handoff happens
+	Reason string `json:"reason,omitempty"`
+
+	// Message is the input passed to the next agent
+	Message string `json:"message,omitempty"`
 
 	// Payload carries the data delivered to the target
 	Payload map[string]interface{} `json:"payload,omitempty"`
@@ -128,7 +135,13 @@ func (h *Handoff) GetMetadata(key string) (interface{}, bool) {
 
 // IsValid validates the handoff
 func (h *Handoff) IsValid() bool {
-	return h.Target != "" && h.Priority >= 1 && h.Priority <= 10
+	if h.Target == "" {
+		return false
+	}
+	if h.Priority == 0 {
+		return true
+	}
+	return h.Priority >= 1 && h.Priority <= 10
 }
 
 // HandoffManager defines the handoff manager interface
@@ -204,6 +217,46 @@ func HandoffFromInterface(value interface{}) *Handoff {
 			if err := json.Unmarshal(data, &h); err == nil && h.Target != "" {
 				return &h
 			}
+		}
+	}
+	return nil
+}
+
+// ParseHandoff parses a handoff directive from content.
+// Accepted formats:
+// - {"handoff": {...}}
+// - {"target": "...", "reason": "...", "message": "..."}
+// - "HANDOFF: {...}"
+func ParseHandoff(content string) *Handoff {
+	raw := strings.TrimSpace(content)
+	if raw == "" {
+		return nil
+	}
+	upper := strings.ToUpper(raw)
+	if strings.HasPrefix(upper, "HANDOFF:") {
+		raw = strings.TrimSpace(raw[len("HANDOFF:"):])
+	}
+
+	type wrapper struct {
+		Handoff *Handoff `json:"handoff"`
+	}
+	var w wrapper
+	if err := json.Unmarshal([]byte(raw), &w); err == nil && w.Handoff != nil {
+		if w.Handoff.Priority == 0 {
+			w.Handoff.Priority = 5
+		}
+		if w.Handoff.IsValid() {
+			return w.Handoff
+		}
+	}
+
+	var h Handoff
+	if err := json.Unmarshal([]byte(raw), &h); err == nil {
+		if h.Priority == 0 {
+			h.Priority = 5
+		}
+		if h.IsValid() {
+			return &h
 		}
 	}
 	return nil

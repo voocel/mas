@@ -3,6 +3,7 @@ package multi
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/voocel/mas/agent"
@@ -137,21 +138,30 @@ func RunHandoff(ctx context.Context, r *runner.Runner, team *Team, router Router
 
 	current := input
 	var last schema.Message
+	nextTarget := ""
 	for step := 0; step < cfg.maxSteps; step++ {
 		run, err := prepareRun(ctx, r, cfg)
 		if err != nil {
 			return schema.Message{}, err
 		}
-		ag, err := router.Select(ctx, current, team)
+		ag, err := selectAgent(ctx, current, team, router, nextTarget)
 		if err != nil {
 			return schema.Message{}, err
 		}
+		nextTarget = ""
 		if ag == nil {
 			return schema.Message{}, fmt.Errorf("multi: agent is nil")
 		}
+		inputForStep := current
 		resp, err := run.Run(ctx, ag, current)
 		if err != nil {
 			return schema.Message{}, err
+		}
+		if handoff := extractHandoff(resp); handoff != nil {
+			nextTarget = handoff.Target
+			current = buildHandoffMessage(inputForStep, handoff)
+			last = resp
+			continue
 		}
 		if err := appendShared(ctx, cfg, resp); err != nil {
 			return schema.Message{}, err
@@ -160,6 +170,46 @@ func RunHandoff(ctx context.Context, r *runner.Runner, team *Team, router Router
 		current = resp
 	}
 	return last, nil
+}
+
+func selectAgent(ctx context.Context, current schema.Message, team *Team, router Router, nextTarget string) (*agent.Agent, error) {
+	if strings.TrimSpace(nextTarget) == "" {
+		return router.Select(ctx, current, team)
+	}
+	return team.Route(nextTarget)
+}
+
+func extractHandoff(msg schema.Message) *schema.Handoff {
+	if msg.Metadata != nil {
+		if value, ok := msg.Metadata["handoff"]; ok {
+			if h := schema.HandoffFromInterface(value); h != nil {
+				return h
+			}
+		}
+	}
+	return schema.ParseHandoff(msg.Content)
+}
+
+func buildHandoffMessage(prev schema.Message, handoff *schema.Handoff) schema.Message {
+	content := strings.TrimSpace(handoff.Message)
+	if content == "" {
+		if value, ok := handoff.Payload["message"].(string); ok {
+			content = value
+		}
+	}
+	if content == "" {
+		if value, ok := handoff.Payload["input"].(string); ok {
+			content = value
+		}
+	}
+	if content == "" {
+		return prev
+	}
+	msg := schema.Message{Role: schema.RoleUser, Content: content}
+	if handoff.Reason != "" {
+		msg.SetMetadata("handoff_reason", handoff.Reason)
+	}
+	return msg
 }
 
 // RunAutoHandoff uses LLM to automatically select the best agent for each step.

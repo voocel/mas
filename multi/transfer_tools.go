@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"strings"
 
@@ -25,7 +26,13 @@ type TransferTool struct {
 }
 
 func NewTransferTool(target string) *TransferTool {
-	name := transferToolName(target)
+	return NewTransferToolWithName(target, transferToolName(target))
+}
+
+func NewTransferToolWithName(target, name string) *TransferTool {
+	if strings.TrimSpace(name) == "" {
+		name = transferToolName(target)
+	}
 	schemaDef := tools.CreateToolSchema(
 		fmt.Sprintf("Transfer control to agent %s", target),
 		map[string]interface{}{
@@ -61,21 +68,38 @@ func buildTransferTools(team *Team, excludeName string) ([]tools.Tool, map[strin
 	toolsList := make([]tools.Tool, 0)
 	toolMap := make(map[string]string)
 	excludeName = strings.TrimSpace(excludeName)
-	for _, name := range team.List() {
+	names := team.List()
+	counts := make(map[string]int, len(names))
+	for _, name := range names {
 		if excludeName != "" && name == excludeName {
 			continue
 		}
-		toolName := transferToolName(name)
+		base := transferToolBaseName(name)
+		counts[base]++
+	}
+	for _, name := range names {
+		if excludeName != "" && name == excludeName {
+			continue
+		}
+		base := transferToolBaseName(name)
+		toolName := base
+		if counts[base] > 1 {
+			toolName = base + "_" + shortHash(name)
+		}
 		if _, exists := toolMap[toolName]; exists {
 			continue
 		}
 		toolMap[toolName] = name
-		toolsList = append(toolsList, NewTransferTool(name))
+		toolsList = append(toolsList, NewTransferToolWithName(name, toolName))
 	}
 	return toolsList, toolMap
 }
 
 func transferToolName(target string) string {
+	return transferToolBaseName(target)
+}
+
+func transferToolBaseName(target string) string {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return transferToolPrefix + "unknown"
@@ -110,4 +134,10 @@ func parseTransferCall(call schema.ToolCall, target string) *schema.Handoff {
 		return h
 	}
 	return nil
+}
+
+func shortHash(value string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(value))
+	return fmt.Sprintf("%08x", h.Sum32())
 }

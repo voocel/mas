@@ -164,6 +164,8 @@ router := &multi.KeywordRouter{
 resp, _ := multi.RunHandoff(ctx, r, team, router, msg, multi.WithMaxSteps(3))
 ```
 
+Handoff uses `transfer_to_<agent>` tool calls only (no JSON/text handoff).
+
 ## Middleware & Policies
 
 ```go

@@ -9,15 +9,16 @@ import (
 type Option func(*runConfig)
 
 type runConfig struct {
-	sharedMemory memory.Store
-	sharedMu     *sync.Mutex
-	maxSteps     int
+	sharedMemory        memory.Store
+	sharedMu            *sync.Mutex
+	maxSteps            int
+	enableTransferTools bool
 }
 
 type HandoffOption = Option
 
 func defaultRunConfig() runConfig {
-	return runConfig{maxSteps: 3}
+	return runConfig{maxSteps: 3, enableTransferTools: true}
 }
 
 func applyOptions(opts ...Option) runConfig {
@@ -44,5 +45,11 @@ func WithMaxSteps(steps int) Option {
 		if steps > 0 {
 			cfg.maxSteps = steps
 		}
+	}
+}
+
+func WithTransferTools(enabled bool) Option {
+	return func(cfg *runConfig) {
+		cfg.enableTransferTools = enabled
 	}
 }

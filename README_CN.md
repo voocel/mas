@@ -155,6 +155,8 @@ router := &multi.KeywordRouter{
 resp, _ := multi.RunHandoff(ctx, r, team, router, msg, multi.WithMaxSteps(3))
 ```
 
+handoff 仅通过 `transfer_to_<agent>` 工具调用触发（不支持 JSON/文本 handoff）。
+
 ## 中间件与策略
 
 ```go

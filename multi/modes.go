@@ -10,6 +10,7 @@ import (
 	"github.com/voocel/mas/llm"
 	"github.com/voocel/mas/runner"
 	"github.com/voocel/mas/schema"
+	"github.com/voocel/mas/tools"
 )
 
 // Reducer merges parallel results.
@@ -152,12 +153,20 @@ func RunHandoff(ctx context.Context, r *runner.Runner, team *Team, router Router
 		if ag == nil {
 			return schema.Message{}, fmt.Errorf("multi: agent is nil")
 		}
+		agentName := teamNameOf(team, ag)
+		var transferMap map[string]string
+		if cfg.enableTransferTools {
+			transferTools, toolMap := buildTransferTools(team, agentName)
+			transferMap = toolMap
+			ag = cloneAgentWithTools(ag, transferTools)
+		}
 		inputForStep := current
-		resp, err := run.Run(ctx, ag, current)
+		result, err := run.RunWithResult(ctx, ag, current)
 		if err != nil {
 			return schema.Message{}, err
 		}
-		if handoff := extractHandoff(resp); handoff != nil {
+		resp := result.Message
+		if handoff := extractTransferHandoff(result.ToolCalls, transferMap); handoff != nil {
 			nextTarget = handoff.Target
 			current = buildHandoffMessage(inputForStep, handoff)
 			last = resp
@@ -179,15 +188,38 @@ func selectAgent(ctx context.Context, current schema.Message, team *Team, router
 	return team.Route(nextTarget)
 }
 
-func extractHandoff(msg schema.Message) *schema.Handoff {
-	if msg.Metadata != nil {
-		if value, ok := msg.Metadata["handoff"]; ok {
-			if h := schema.HandoffFromInterface(value); h != nil {
-				return h
-			}
+func teamNameOf(team *Team, ag *agent.Agent) string {
+	if team == nil || ag == nil {
+		return ""
+	}
+	for _, name := range team.List() {
+		candidate, ok := team.Get(name)
+		if !ok {
+			continue
+		}
+		if candidate == ag {
+			return name
 		}
 	}
-	return schema.ParseHandoff(msg.Content)
+	return ag.Name()
+}
+
+func extractTransferHandoff(calls []schema.ToolCall, toolMap map[string]string) *schema.Handoff {
+	if len(calls) == 0 || len(toolMap) == 0 {
+		return nil
+	}
+	for i := len(calls) - 1; i >= 0; i-- {
+		call := calls[i]
+		target, ok := toolMap[call.Name]
+		if !ok {
+			continue
+		}
+		h := parseTransferCall(call, target)
+		if h != nil {
+			return h
+		}
+	}
+	return nil
 }
 
 func buildHandoffMessage(prev schema.Message, handoff *schema.Handoff) schema.Message {
@@ -210,6 +242,23 @@ func buildHandoffMessage(prev schema.Message, handoff *schema.Handoff) schema.Me
 		msg.SetMetadata("handoff_reason", handoff.Reason)
 	}
 	return msg
+}
+
+func cloneAgentWithTools(ag *agent.Agent, extra []tools.Tool) *agent.Agent {
+	if ag == nil || len(extra) == 0 {
+		return ag
+	}
+	toolsList := append(append([]tools.Tool{}, ag.Tools()...), extra...)
+	return agent.NewWithConfig(agent.Config{
+		ID:                 ag.ID(),
+		Name:               ag.Name(),
+		SystemPrompt:       ag.SystemPrompt(),
+		HandoffDescription: ag.HandoffDescription(),
+		Tools:              toolsList,
+		Metadata:           ag.Metadata(),
+		InputGuardrails:    ag.InputGuardrails(),
+		OutputGuardrails:   ag.OutputGuardrails(),
+	})
 }
 
 // RunAutoHandoff uses LLM to automatically select the best agent for each step.

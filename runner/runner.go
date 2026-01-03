@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -357,6 +358,17 @@ func (r *Runner) runWithState(
 		}
 
 		toolCalls = append(toolCalls, resp.Message.ToolCalls...)
+		if hasTransferToolCall(resp.Message.ToolCalls) {
+			if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
+				return RunResult{}, err
+			}
+			return RunResult{
+				Message:     resp.Message,
+				Usage:       lastUsage,
+				ToolCalls:   toolCalls,
+				ToolResults: toolResults,
+			}, nil
+		}
 		toolMessages, results, err := r.executeTools(ctx, registry, ag, resp.Message.ToolCalls, runID, stepID)
 		if err != nil {
 			r.config.Observer.OnError(ctx, err)
@@ -549,6 +561,12 @@ func (r *Runner) RunStream(ctx context.Context, ag *agent.Agent, input schema.Me
 			}
 
 			toolCalls = append(toolCalls, finalMessage.ToolCalls...)
+			if hasTransferToolCall(finalMessage.ToolCalls) {
+				if err := r.saveCheckpoint(ctx, runID, turn, input, messages, toolCalls, toolResults); err != nil {
+					out <- schema.NewErrorEvent(err, ag.ID()).WithIDs(runID, stepID, "")
+				}
+				return
+			}
 			for i, call := range finalMessage.ToolCalls {
 				spanID := schema.SpanID(fmt.Sprintf("%s.tool.%d", stepID, i))
 				out <- schema.NewToolCallEvent(call, ag.ID()).WithIDs(runID, stepID, spanID)
@@ -634,6 +652,15 @@ func collectToolSpecs(toolList []tools.Tool) []llm.ToolSpec {
 		specs = append(specs, llm.ToolSpec{Name: t.Name(), Description: t.Description(), Parameters: params})
 	}
 	return specs
+}
+
+func hasTransferToolCall(calls []schema.ToolCall) bool {
+	for _, call := range calls {
+		if strings.HasPrefix(call.Name, schema.TransferToolPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func trimHistory(history []schema.Message, window int) []schema.Message {

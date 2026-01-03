@@ -12,8 +12,6 @@ import (
 	"github.com/voocel/mas/tools"
 )
 
-const transferToolPrefix = "transfer_to_"
-
 type transferArgs struct {
 	Reason  string                 `json:"reason,omitempty"`
 	Message string                 `json:"message,omitempty"`
@@ -102,7 +100,7 @@ func transferToolName(target string) string {
 func transferToolBaseName(target string) string {
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return transferToolPrefix + "unknown"
+		return schema.TransferToolPrefix + "unknown"
 	}
 	normalized := strings.ToLower(target)
 	normalized = invalidToolChars.ReplaceAllString(normalized, "_")
@@ -110,7 +108,7 @@ func transferToolBaseName(target string) string {
 	if normalized == "" {
 		normalized = "agent"
 	}
-	return transferToolPrefix + normalized
+	return schema.TransferToolPrefix + normalized
 }
 
 var invalidToolChars = regexp.MustCompile(`[^a-z0-9_-]+`)

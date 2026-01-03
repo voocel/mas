@@ -44,6 +44,9 @@ const (
 type HandoffType string
 
 const (
+	// TransferToolPrefix is the standard prefix for handoff tools.
+	TransferToolPrefix = "transfer_to_"
+
 	HandoffTypeDelegate    HandoffType = "delegate"    // Delegate: assign the task to another agent
 	HandoffTypeCollaborate HandoffType = "collaborate" // Collaborate: work with another agent to complete the task
 	HandoffTypeEscalate    HandoffType = "escalate"    // Escalate: forward the task to a higher-tier agent

@@ -2,6 +2,7 @@ package multi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/voocel/mas/agent"
@@ -58,6 +59,57 @@ func TestRunParallel(t *testing.T) {
 	}
 	if resp.Content != "ok" {
 		t.Fatalf("unexpected response: %s", resp.Content)
+	}
+}
+
+func TestBuildHandoffMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		prev     schema.Message
+		handoff  *schema.Handoff
+		wantPre  string // expected prefix in content
+		wantBody string // expected body in content
+	}{
+		{
+			name:     "with reason and message",
+			prev:     schema.Message{Content: "original"},
+			handoff:  &schema.Handoff{Reason: "needs analysis", Message: "analyze this data"},
+			wantPre:  "[Handoff: needs analysis]",
+			wantBody: "analyze this data",
+		},
+		{
+			name:     "message only, no reason",
+			prev:     schema.Message{Content: "original"},
+			handoff:  &schema.Handoff{Message: "direct message"},
+			wantPre:  "",
+			wantBody: "direct message",
+		},
+		{
+			name:     "reason only, fallback to prev content",
+			prev:     schema.Message{Content: "original content"},
+			handoff:  &schema.Handoff{Reason: "context switch"},
+			wantPre:  "[Handoff: context switch]",
+			wantBody: "original content",
+		},
+		{
+			name:     "payload message fallback",
+			prev:     schema.Message{Content: "original"},
+			handoff:  &schema.Handoff{Reason: "from payload", Payload: map[string]interface{}{"message": "payload msg"}},
+			wantPre:  "[Handoff: from payload]",
+			wantBody: "payload msg",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := buildHandoffMessage(tt.prev, tt.handoff)
+			if tt.wantPre != "" && !strings.Contains(msg.Content, tt.wantPre) {
+				t.Errorf("expected prefix %q in content %q", tt.wantPre, msg.Content)
+			}
+			if !strings.Contains(msg.Content, tt.wantBody) {
+				t.Errorf("expected body %q in content %q", tt.wantBody, msg.Content)
+			}
+		})
 	}
 }
 

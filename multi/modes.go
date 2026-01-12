@@ -235,11 +235,18 @@ func buildHandoffMessage(prev schema.Message, handoff *schema.Handoff) schema.Me
 		}
 	}
 	if content == "" {
-		return prev
+		content = prev.Content
 	}
+
+	// Inject handoff context so the receiving agent understands why it was called
+	reason := strings.TrimSpace(handoff.Reason)
+	if reason != "" {
+		content = fmt.Sprintf("[Handoff: %s]\n\n%s", reason, content)
+	}
+
 	msg := schema.Message{Role: schema.RoleUser, Content: content}
-	if handoff.Reason != "" {
-		msg.SetMetadata("handoff_reason", handoff.Reason)
+	if reason != "" {
+		msg.SetMetadata("handoff_reason", reason)
 	}
 	return msg
 }

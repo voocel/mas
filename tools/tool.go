@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -73,7 +74,7 @@ func NewBaseTool(name, description string, schema *ToolSchema) *BaseTool {
 		name:        name,
 		description: description,
 		schema:      schema,
-		config:      DefaultToolConfig,
+		config:      cloneToolConfig(DefaultToolConfig),
 	}
 }
 
@@ -94,11 +95,14 @@ func (t *BaseTool) Capabilities() []Capability {
 }
 
 func (t *BaseTool) Config() *ToolConfig {
+	if t.config == nil {
+		t.config = cloneToolConfig(DefaultToolConfig)
+	}
 	return t.config
 }
 
 func (t *BaseTool) SetConfig(config *ToolConfig) {
-	t.config = config
+	t.config = cloneToolConfig(config)
 }
 
 // Execute is a default implementation and should be overridden.
@@ -143,9 +147,19 @@ func (t *BaseTool) ValidateInput(input json.RawMessage) error {
 	}
 
 	// Basic JSON format validation
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		if len(t.schema.Required) == 0 {
+			return nil
+		}
+		return schema.NewValidationError("input", string(input), "required field missing")
+	}
 	var data map[string]interface{}
-	if err := json.Unmarshal(input, &data); err != nil {
-		return schema.NewValidationError("input", string(input), "invalid JSON format")
+	if err := json.Unmarshal(trimmed, &data); err != nil {
+		return schema.NewValidationError("input", string(trimmed), "invalid JSON format")
+	}
+	if data == nil {
+		data = map[string]interface{}{}
 	}
 
 	// Verify required fields
@@ -201,6 +215,18 @@ func ArrayProperty(description string, itemType string) map[string]interface{} {
 			"type": itemType,
 		},
 	}
+}
+
+func cloneToolConfig(cfg *ToolConfig) *ToolConfig {
+	if cfg == nil {
+		if DefaultToolConfig == nil {
+			return &ToolConfig{}
+		}
+		copyCfg := *DefaultToolConfig
+		return &copyCfg
+	}
+	copyCfg := *cfg
+	return &copyCfg
 }
 
 // ObjectProperty defines an object property.

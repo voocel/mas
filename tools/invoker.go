@@ -2,9 +2,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
-	"time"
 
 	"github.com/voocel/mas/schema"
 )
@@ -107,8 +107,10 @@ func executeToolCall(ctx context.Context, registry *Registry, call schema.ToolCa
 		return schema.ToolResult{ID: call.ID, Error: err.Error()}, err
 	}
 
-	if baseTool, ok := tool.(*BaseTool); ok {
-		if err := baseTool.ValidateInput(call.Args); err != nil {
+	if validator, ok := tool.(interface {
+		ValidateInput(json.RawMessage) error
+	}); ok {
+		if err := validator.ValidateInput(call.Args); err != nil {
 			return schema.ToolResult{ID: call.ID, Error: err.Error()}, err
 		}
 	}
@@ -137,7 +139,10 @@ func getToolConfig(tool Tool) *ToolConfig {
 		Config() *ToolConfig
 	}
 	if getter, ok := tool.(configGetter); ok {
-		return getter.Config()
+		if cfg := getter.Config(); cfg != nil {
+			return cfg
+		}
+		return cloneToolConfig(DefaultToolConfig)
 	}
-	return &ToolConfig{Timeout: 30 * time.Second}
+	return cloneToolConfig(DefaultToolConfig)
 }

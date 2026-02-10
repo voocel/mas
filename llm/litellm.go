@@ -124,6 +124,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 		defer stream.Close()
 
 		var fullContent string
+		var finishReason string
 		toolCallBuilders := make(map[int]*toolCallBuilder)
 
 		for {
@@ -148,11 +149,16 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 			if chunk.ToolCallDelta != nil {
 				applyToolCallDelta(toolCallBuilders, chunk.ToolCallDelta)
 			}
+
+			if chunk.FinishReason != "" {
+				finishReason = chunk.FinishReason
+			}
 		}
 
 		finalMessage := Message{
-			Role:    RoleAssistant,
-			Content: fullContent,
+			Role:       RoleAssistant,
+			Content:    fullContent,
+			StopReason: finishReason,
 		}
 
 		if toolCalls := buildToolCalls(toolCallBuilders); len(toolCalls) > 0 {
@@ -202,8 +208,9 @@ func convertMessages(messages []Message) []litellm.Message {
 // convertResponse converts litellm.Response to llm.Message.
 func convertResponse(response *litellm.Response) Message {
 	message := Message{
-		Role:    RoleAssistant,
-		Content: response.Content,
+		Role:       RoleAssistant,
+		Content:    response.Content,
+		StopReason: response.FinishReason,
 	}
 
 	if len(response.ToolCalls) > 0 {

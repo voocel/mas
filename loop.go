@@ -135,14 +135,23 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 			currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
 			*newMessages = append(*newMessages, assistantMsg)
 
+			// Check stop reason — terminate early on error/aborted
+			if assistantMsg.StopReason == "error" || assistantMsg.StopReason == "aborted" {
+				emit(ch, Event{Type: EventTurnEnd, Message: assistantMsg})
+				emit(ch, Event{Type: EventAgentEnd, Data: *newMessages})
+				return
+			}
+
 			// Check for tool calls
 			toolCalls := assistantMsg.ToolCalls
 			hasMoreToolCalls = len(toolCalls) > 0
 
+			var turnToolResults []ToolResult
 			if hasMoreToolCalls {
-				toolResults, steering := executeToolCalls(ctx, currentCtx.Tools, toolCalls, config, ch)
+				var steering []AgentMessage
+				turnToolResults, steering = executeToolCalls(ctx, currentCtx.Tools, toolCalls, config, ch)
 
-				for _, tr := range toolResults {
+				for _, tr := range turnToolResults {
 					resultMsg := toolResultToMessage(tr)
 					emit(ch, Event{Type: EventMessageStart, Message: resultMsg})
 					emit(ch, Event{Type: EventMessageEnd, Message: resultMsg})
@@ -153,7 +162,7 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 				steeringAfterTools = steering
 			}
 
-			emit(ch, Event{Type: EventTurnEnd, Message: assistantMsg})
+			emit(ch, Event{Type: EventTurnEnd, Message: assistantMsg, ToolResults: turnToolResults})
 			turnCount++
 
 			// Get steering messages after turn completes
@@ -293,14 +302,17 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 	results := make([]ToolResult, 0, len(calls))
 
 	for i, call := range calls {
+		tool := findTool(tools, call.Name)
+		label := toolLabel(tool)
+
 		emit(ch, Event{
-			Type:   EventToolExecStart,
-			ToolID: call.ID,
-			Tool:   call.Name,
-			Args:   call.Args,
+			Type:      EventToolExecStart,
+			ToolID:    call.ID,
+			Tool:      call.Name,
+			ToolLabel: label,
+			Args:      call.Args,
 		})
 
-		tool := findTool(tools, call.Name)
 		var result ToolResult
 
 		if tool == nil {
@@ -311,7 +323,19 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 				IsError:    true,
 			}
 		} else {
-			output, err := tool.Execute(ctx, call.Args)
+			// Inject progress callback so tools can report partial results
+			progressCtx := WithToolProgress(ctx, func(partial json.RawMessage) {
+				emit(ch, Event{
+					Type:      EventToolExecUpdate,
+					ToolID:    call.ID,
+					Tool:      call.Name,
+					ToolLabel: label,
+					Args:      call.Args,
+					Result:    partial,
+				})
+			})
+
+			output, err := tool.Execute(progressCtx, call.Args)
 			if err != nil {
 				errContent, _ := json.Marshal(err.Error())
 				result = ToolResult{
@@ -328,11 +352,12 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 		}
 
 		emit(ch, Event{
-			Type:    EventToolExecEnd,
-			ToolID:  call.ID,
-			Tool:    call.Name,
-			Result:  result.Content,
-			IsError: result.IsError,
+			Type:      EventToolExecEnd,
+			ToolID:    call.ID,
+			Tool:      call.Name,
+			ToolLabel: label,
+			Result:    result.Content,
+			IsError:   result.IsError,
 		})
 
 		results = append(results, result)
@@ -343,7 +368,7 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 			if len(steering) > 0 {
 				// Skip remaining tool calls
 				for _, skipped := range calls[i+1:] {
-					results = append(results, skipToolCall(skipped, ch))
+					results = append(results, skipToolCall(skipped, tools, ch))
 				}
 				return results, steering
 			}
@@ -354,12 +379,15 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 }
 
 // skipToolCall creates a skipped result for an interrupted tool call.
-func skipToolCall(call ToolCall, ch chan<- Event) ToolResult {
+func skipToolCall(call ToolCall, tools []Tool, ch chan<- Event) ToolResult {
+	label := toolLabel(findTool(tools, call.Name))
+
 	emit(ch, Event{
-		Type:   EventToolExecStart,
-		ToolID: call.ID,
-		Tool:   call.Name,
-		Args:   call.Args,
+		Type:      EventToolExecStart,
+		ToolID:    call.ID,
+		Tool:      call.Name,
+		ToolLabel: label,
+		Args:      call.Args,
 	})
 
 	content, _ := json.Marshal("Skipped due to queued user message.")
@@ -370,14 +398,26 @@ func skipToolCall(call ToolCall, ch chan<- Event) ToolResult {
 	}
 
 	emit(ch, Event{
-		Type:    EventToolExecEnd,
-		ToolID:  call.ID,
-		Tool:    call.Name,
-		Result:  result.Content,
-		IsError: true,
+		Type:      EventToolExecEnd,
+		ToolID:    call.ID,
+		Tool:      call.Name,
+		ToolLabel: label,
+		Result:    result.Content,
+		IsError:   true,
 	})
 
 	return result
+}
+
+// toolLabel returns the human-readable label for a tool, or empty string if not available.
+func toolLabel(tool Tool) string {
+	if tool == nil {
+		return ""
+	}
+	if labeler, ok := tool.(ToolLabeler); ok {
+		return labeler.Label()
+	}
+	return ""
 }
 
 // toolResultToMessage converts a ToolResult into a Message for the context.

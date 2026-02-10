@@ -13,7 +13,8 @@ type WriteTool struct{}
 
 func NewWrite() *WriteTool { return &WriteTool{} }
 
-func (t *WriteTool) Name() string        { return "write" }
+func (t *WriteTool) Name() string  { return "write" }
+func (t *WriteTool) Label() string { return "Write File" }
 func (t *WriteTool) Description() string { return "Write content to a file. Creates parent directories if needed. Overwrites existing files." }
 func (t *WriteTool) Schema() map[string]any {
 	return map[string]any{

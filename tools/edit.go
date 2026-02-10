@@ -14,7 +14,8 @@ type EditTool struct{}
 
 func NewEdit() *EditTool { return &EditTool{} }
 
-func (t *EditTool) Name() string { return "edit" }
+func (t *EditTool) Name() string  { return "edit" }
+func (t *EditTool) Label() string { return "Edit File" }
 func (t *EditTool) Description() string {
 	return "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits."
 }

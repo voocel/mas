@@ -6,6 +6,26 @@ import (
 	"time"
 )
 
+// toolProgressKey is the context key for tool progress callbacks.
+type toolProgressKey struct{}
+
+// ToolProgressFunc is a callback for reporting tool execution progress.
+// Tools call ReportToolProgress to emit partial results during long operations.
+type ToolProgressFunc func(partialResult json.RawMessage)
+
+// WithToolProgress injects a progress callback into the context.
+func WithToolProgress(ctx context.Context, fn ToolProgressFunc) context.Context {
+	return context.WithValue(ctx, toolProgressKey{}, fn)
+}
+
+// ReportToolProgress reports partial progress during tool execution.
+// Silently ignored if no callback is registered in the context.
+func ReportToolProgress(ctx context.Context, partial json.RawMessage) {
+	if fn, ok := ctx.Value(toolProgressKey{}).(ToolProgressFunc); ok {
+		fn(partial)
+	}
+}
+
 // Role defines message roles.
 type Role string
 
@@ -27,11 +47,12 @@ type AgentMessage interface {
 
 // Message is an LLM-level message.
 type Message struct {
-	Role      Role           `json:"role"`
-	Content   string         `json:"content"`
-	ToolCalls []ToolCall     `json:"tool_calls,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Timestamp time.Time      `json:"timestamp"`
+	Role       Role           `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
+	StopReason string         `json:"stop_reason,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	Timestamp  time.Time      `json:"timestamp"`
 }
 
 func (m Message) GetRole() Role           { return m.Role }
@@ -56,11 +77,18 @@ type ToolResult struct {
 
 // Tool defines the minimal tool interface.
 // Timeout control goes through context.Context.
+// Tools can report execution progress via ReportToolProgress(ctx, partial).
 type Tool interface {
 	Name() string
 	Description() string
 	Schema() map[string]any
 	Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error)
+}
+
+// ToolLabeler is an optional interface for tools to provide a human-readable label.
+// Used by UI consumers for display purposes (e.g. "Read File" instead of "read").
+type ToolLabeler interface {
+	Label() string
 }
 
 // FuncTool wraps a function as a Tool (convenience helper).
@@ -143,10 +171,11 @@ type ChatModel interface {
 
 // StreamEvent is a streaming event from the LLM.
 type StreamEvent struct {
-	Type    StreamEventType
-	Delta   string  // text delta for token events
-	Message Message // final message for done events
-	Err     error   // error for error events
+	Type       StreamEventType
+	Delta      string  // text delta for token events
+	Message    Message // final message for done events
+	StopReason string  // finish reason from LLM provider (for done events)
+	Err        error   // error for error events
 }
 
 // StreamEventType identifies LLM streaming event types.
@@ -179,23 +208,26 @@ const (
 	EventMessageStart  EventType = "message_start"
 	EventMessageUpdate EventType = "message_update"
 	EventMessageEnd    EventType = "message_end"
-	EventToolExecStart EventType = "tool_exec_start"
-	EventToolExecEnd   EventType = "tool_exec_end"
-	EventError         EventType = "error"
+	EventToolExecStart  EventType = "tool_exec_start"
+	EventToolExecUpdate EventType = "tool_exec_update"
+	EventToolExecEnd    EventType = "tool_exec_end"
+	EventError          EventType = "error"
 )
 
 // Event is a lifecycle event emitted by the agent loop.
 // This is the single output channel for all lifecycle information.
 // Consumers (TUI, Slack bot, Web UI, logging) subscribe and filter by Type.
 type Event struct {
-	Type    EventType
-	Message AgentMessage // for message_start/update/end, turn_end, agent_end
-	Delta   string       // text delta for message_update
-	ToolID  string       // for tool_exec_*
-	Tool    string       // tool name for tool_exec_*
-	Args    any          // tool args for tool_exec_start
-	Result  any          // tool result for tool_exec_end
-	IsError bool         // tool error flag for tool_exec_end
-	Err     error        // for error events
-	Data    any          // generic payload (e.g. []AgentMessage for agent_end)
+	Type        EventType
+	Message     AgentMessage // for message_start/update/end, turn_end, agent_end
+	Delta       string       // text delta for message_update
+	ToolID      string       // for tool_exec_*
+	Tool        string       // tool name for tool_exec_*
+	ToolLabel   string       // human-readable tool label for tool_exec_* (from ToolLabeler)
+	Args        any          // tool args for tool_exec_start
+	Result      any          // tool result for tool_exec_end/update
+	IsError     bool         // tool error flag for tool_exec_end
+	ToolResults []ToolResult // for turn_end: all tool results from this turn
+	Err         error        // for error events
+	Data        any          // generic payload (e.g. []AgentMessage for agent_end)
 }

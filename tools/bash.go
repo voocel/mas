@@ -20,7 +20,8 @@ func NewBash(workDir string) *BashTool {
 	return &BashTool{WorkDir: workDir, Timeout: 2 * time.Minute}
 }
 
-func (t *BashTool) Name() string { return "bash" }
+func (t *BashTool) Name() string  { return "bash" }
+func (t *BashTool) Label() string { return "Execute Command" }
 func (t *BashTool) Description() string {
 	return fmt.Sprintf(
 		"Execute a bash command. Output is truncated to last %d lines or %s (whichever is hit first). Optionally provide a timeout in seconds.",

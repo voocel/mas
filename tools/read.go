@@ -14,7 +14,8 @@ type ReadTool struct{}
 
 func NewRead() *ReadTool { return &ReadTool{} }
 
-func (t *ReadTool) Name() string { return "read" }
+func (t *ReadTool) Name() string  { return "read" }
+func (t *ReadTool) Label() string { return "Read File" }
 func (t *ReadTool) Description() string {
 	return fmt.Sprintf(
 		"Read file contents. Output is truncated to %d lines or %s (whichever is hit first). Use offset/limit for large files.",

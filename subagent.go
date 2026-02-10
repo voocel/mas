@@ -71,7 +71,8 @@ func NewSubAgentTool(agents ...SubAgentConfig) *SubAgentTool {
 	return &SubAgentTool{agents: m}
 }
 
-func (t *SubAgentTool) Name() string { return "subagent" }
+func (t *SubAgentTool) Name() string  { return "subagent" }
+func (t *SubAgentTool) Label() string { return "Delegate to SubAgent" }
 
 func (t *SubAgentTool) Description() string {
 	names := make([]string, 0, len(t.agents))

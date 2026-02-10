@@ -1,58 +1,6 @@
 package llm
 
-import (
-	"context"
-
-	"github.com/voocel/mas/schema"
-)
-
-// ChatModel is the unified model interface for requests and responses.
-type ChatModel interface {
-	Generate(ctx context.Context, req *Request) (*Response, error)
-	GenerateStream(ctx context.Context, req *Request) (<-chan schema.StreamEvent, error)
-	SupportsTools() bool
-	SupportsStreaming() bool
-	Info() ModelInfo
-}
-
-// Request describes a generation request.
-type Request struct {
-	Messages       []schema.Message       `json:"messages"`
-	Config         *GenerationConfig      `json:"config,omitempty"`
-	Tools          []ToolSpec             `json:"tools,omitempty"`
-	ToolChoice     *ToolChoiceOption      `json:"tool_choice,omitempty"`
-	ResponseFormat *ResponseFormat        `json:"response_format,omitempty"`
-	Extra          map[string]interface{} `json:"extra,omitempty"`
-}
-
-// Response describes model output and metadata.
-type Response struct {
-	Message      schema.Message `json:"message"`
-	Usage        TokenUsage     `json:"usage"`
-	FinishReason string         `json:"finish_reason"`
-	ModelInfo    ModelInfo      `json:"model_info"`
-}
-
-// ToolSpec describes a tool callable by the model.
-type ToolSpec struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Parameters  interface{} `json:"parameters"`
-}
-
-// ToolChoiceOption describes tool selection strategy.
-// Type: auto/none/required/function; when function, Name specifies the function name.
-type ToolChoiceOption struct {
-	Type string `json:"type"`
-	Name string `json:"name,omitempty"`
-}
-
-// ResponseFormat defines structured output format (aligned with litellm).
-type ResponseFormat struct {
-	Type       string      `json:"type"` // text, json_object, json_schema
-	JSONSchema interface{} `json:"json_schema,omitempty"`
-	Strict     *bool       `json:"strict,omitempty"`
-}
+import "github.com/voocel/mas"
 
 // ModelInfo contains basic model metadata.
 type ModelInfo struct {
@@ -99,7 +47,7 @@ var DefaultGenerationConfig = &GenerationConfig{
 	Seed:             nil,
 }
 
-// BaseModel provides a common implementation.
+// BaseModel provides common model metadata and capability checks.
 type BaseModel struct {
 	info   ModelInfo
 	config *GenerationConfig
@@ -112,9 +60,8 @@ func NewBaseModel(info ModelInfo, config *GenerationConfig) *BaseModel {
 	return &BaseModel{info: info, config: config}
 }
 
-func (m *BaseModel) Info() ModelInfo                    { return m.info }
-func (m *BaseModel) GetConfig() *GenerationConfig       { return m.config }
-func (m *BaseModel) SetConfig(config *GenerationConfig) { m.config = config }
+func (m *BaseModel) Info() ModelInfo              { return m.info }
+func (m *BaseModel) GetConfig() *GenerationConfig { return m.config }
 
 func (m *BaseModel) SupportsCapability(capability ModelCapability) bool {
 	for _, c := range m.info.Capabilities {
@@ -124,10 +71,14 @@ func (m *BaseModel) SupportsCapability(capability ModelCapability) bool {
 	}
 	return false
 }
+
 func (m *BaseModel) SupportsTools() bool {
 	return m.SupportsCapability(CapabilityToolCalling) || m.SupportsCapability(CapabilityFunctionCall)
 }
-func (m *BaseModel) SupportsStreaming() bool { return m.SupportsCapability(CapabilityStreaming) }
+
+func (m *BaseModel) SupportsStreaming() bool {
+	return m.SupportsCapability(CapabilityStreaming)
+}
 
 // TokenUsage is token usage statistics.
 type TokenUsage struct {
@@ -135,3 +86,30 @@ type TokenUsage struct {
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 }
+
+// Re-export root package types for convenience.
+type (
+	Role            = mas.Role
+	Message         = mas.Message
+	ToolCall        = mas.ToolCall
+	ToolSpec        = mas.ToolSpec
+	LLMResponse     = mas.LLMResponse
+	StreamEvent     = mas.StreamEvent
+	StreamEventType = mas.StreamEventType
+	ChatModel       = mas.ChatModel
+)
+
+// Re-export role constants.
+var (
+	RoleUser      = mas.RoleUser
+	RoleAssistant = mas.RoleAssistant
+	RoleSystem    = mas.RoleSystem
+	RoleTool      = mas.RoleTool
+)
+
+// Re-export stream event type constants.
+var (
+	StreamEventToken = mas.StreamEventToken
+	StreamEventDone  = mas.StreamEventDone
+	StreamEventError = mas.StreamEventError
+)

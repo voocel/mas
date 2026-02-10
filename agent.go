@@ -1,0 +1,364 @@
+package mas
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+)
+
+// AgentState is a snapshot of the agent's current state.
+type AgentState struct {
+	SystemPrompt     string
+	Messages         []AgentMessage
+	Tools            []Tool
+	IsRunning        bool
+	StreamMessage    AgentMessage        // partial message being streamed, nil when idle
+	PendingToolCalls map[string]struct{} // tool call IDs currently executing
+	Error            string
+}
+
+// Agent is a stateful wrapper around the agent loop.
+// It consumes loop events to update internal state, just like any external listener.
+type Agent struct {
+	// Configuration (set via options)
+	model            ChatModel
+	systemPrompt     string
+	tools            []Tool
+	maxTurns         int
+	streamFn         StreamFn
+	transformContext func(ctx context.Context, msgs []AgentMessage) ([]AgentMessage, error)
+	convertToLLM     func([]AgentMessage) []Message
+	steeringMode     QueueMode
+	followUpMode     QueueMode
+
+	// State
+	messages         []AgentMessage
+	isRunning        bool
+	lastError        string
+	streamMessage    AgentMessage        // partial message during streaming
+	pendingToolCalls map[string]struct{} // tool call IDs in flight
+
+	// Queues
+	steeringQ []AgentMessage
+	followUpQ []AgentMessage
+
+	// Lifecycle
+	listeners []func(Event)
+	cancel    context.CancelFunc
+	done      chan struct{} // closed when loop finishes
+	mu        sync.Mutex
+}
+
+// NewAgent creates a new Agent with the given options.
+func NewAgent(opts ...AgentOption) *Agent {
+	a := &Agent{
+		maxTurns:         defaultMaxTurns,
+		steeringMode:     QueueModeAll,
+		followUpMode:     QueueModeAll,
+		pendingToolCalls: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
+
+// Subscribe registers a listener for agent events. Returns an unsubscribe function.
+func (a *Agent) Subscribe(fn func(Event)) func() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.listeners = append(a.listeners, fn)
+	idx := len(a.listeners) - 1
+	return func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.listeners[idx] = nil
+	}
+}
+
+// Prompt starts a new conversation turn with the given input.
+func (a *Agent) Prompt(input string) error {
+	msg := Message{
+		Role:      RoleUser,
+		Content:   input,
+		Timestamp: time.Now(),
+	}
+	return a.PromptMessages(msg)
+}
+
+// PromptMessages starts a new conversation turn with arbitrary AgentMessages.
+func (a *Agent) PromptMessages(msgs ...AgentMessage) error {
+	a.mu.Lock()
+	if a.isRunning {
+		a.mu.Unlock()
+		return fmt.Errorf("agent is already running; use Steer() or FollowUp() to queue messages")
+	}
+	a.isRunning = true
+	a.lastError = ""
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	a.done = make(chan struct{})
+
+	agentCtx := AgentContext{
+		SystemPrompt: a.systemPrompt,
+		Messages:     copyMessages(a.messages),
+		Tools:        a.tools,
+	}
+	config := a.buildConfig()
+	a.mu.Unlock()
+
+	go a.consumeLoop(AgentLoop(ctx, msgs, agentCtx, config))
+	return nil
+}
+
+// Continue resumes from the current context without adding new messages.
+// If the last message is from assistant, it dequeues steering/follow-up
+func (a *Agent) Continue() error {
+	a.mu.Lock()
+	if a.isRunning {
+		a.mu.Unlock()
+		return fmt.Errorf("agent is already running")
+	}
+	if len(a.messages) == 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("no messages to continue from")
+	}
+
+	// If last message is assistant, try to dequeue pending messages as new prompt
+	lastMsg := a.messages[len(a.messages)-1]
+	if lastMsg.GetRole() == RoleAssistant {
+		if queued := dequeue(&a.steeringQ, a.steeringMode); len(queued) > 0 {
+			a.mu.Unlock()
+			return a.PromptMessages(queued...)
+		}
+		if queued := dequeue(&a.followUpQ, a.followUpMode); len(queued) > 0 {
+			a.mu.Unlock()
+			return a.PromptMessages(queued...)
+		}
+		a.mu.Unlock()
+		return fmt.Errorf("cannot continue from assistant message without queued messages")
+	}
+
+	a.isRunning = true
+	a.lastError = ""
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	a.done = make(chan struct{})
+
+	agentCtx := AgentContext{
+		SystemPrompt: a.systemPrompt,
+		Messages:     copyMessages(a.messages),
+		Tools:        a.tools,
+	}
+	config := a.buildConfig()
+	a.mu.Unlock()
+
+	go a.consumeLoop(AgentLoopContinue(ctx, agentCtx, config))
+	return nil
+}
+
+// Steer queues a steering message to interrupt the agent mid-run.
+// Delivered after the current tool execution; remaining tools are skipped.
+func (a *Agent) Steer(msg AgentMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steeringQ = append(a.steeringQ, msg)
+}
+
+// FollowUp queues a message to be processed after the agent finishes.
+func (a *Agent) FollowUp(msg AgentMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.followUpQ = append(a.followUpQ, msg)
+}
+
+// Abort cancels the current execution.
+func (a *Agent) Abort() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cancel != nil {
+		a.cancel()
+	}
+}
+
+// WaitForIdle blocks until the agent finishes the current run.
+func (a *Agent) WaitForIdle() {
+	a.mu.Lock()
+	done := a.done
+	a.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+// State returns a snapshot of the agent's current state.
+func (a *Agent) State() AgentState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pending := make(map[string]struct{}, len(a.pendingToolCalls))
+	for k, v := range a.pendingToolCalls {
+		pending[k] = v
+	}
+	return AgentState{
+		SystemPrompt:     a.systemPrompt,
+		Messages:         copyMessages(a.messages),
+		Tools:            a.tools,
+		IsRunning:        a.isRunning,
+		StreamMessage:    a.streamMessage,
+		PendingToolCalls: pending,
+		Error:            a.lastError,
+	}
+}
+
+// Messages returns the current message history.
+func (a *Agent) Messages() []AgentMessage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return copyMessages(a.messages)
+}
+
+// ClearMessages resets the message history.
+func (a *Agent) ClearMessages() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.messages = nil
+}
+
+// Reset clears all state and queues.
+func (a *Agent) Reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.messages = nil
+	a.steeringQ = nil
+	a.followUpQ = nil
+	a.isRunning = false
+	a.lastError = ""
+	a.streamMessage = nil
+	a.pendingToolCalls = make(map[string]struct{})
+}
+
+// buildConfig constructs a LoopConfig from the agent's settings. Must be called with lock held.
+func (a *Agent) buildConfig() LoopConfig {
+	return LoopConfig{
+		Model:            a.model,
+		StreamFn:         a.streamFn,
+		MaxTurns:         a.maxTurns,
+		TransformContext: a.transformContext,
+		ConvertToLLM:     a.convertToLLM,
+		GetSteeringMessages: func() []AgentMessage {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return dequeue(&a.steeringQ, a.steeringMode)
+		},
+		GetFollowUpMessages: func() []AgentMessage {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return dequeue(&a.followUpQ, a.followUpMode)
+		},
+	}
+}
+
+// consumeLoop reads events from the loop channel and updates internal state.
+// handles partial message residue, and constructs error fallback messages.
+func (a *Agent) consumeLoop(events <-chan Event) {
+	var partial AgentMessage // tracks partial message during streaming
+
+	defer func() {
+		a.mu.Lock()
+
+		// Handle partial message residue
+		// If stream ended with an unfinished partial, append it to messages
+		if partial != nil {
+			if msg, ok := partial.(Message); ok {
+				if msg.Content != "" || len(msg.ToolCalls) > 0 {
+					a.messages = append(a.messages, partial)
+				}
+			}
+		}
+
+		// Full cleanup
+		a.isRunning = false
+		a.streamMessage = nil
+		a.pendingToolCalls = make(map[string]struct{})
+		a.cancel = nil
+		done := a.done
+		a.mu.Unlock()
+		if done != nil {
+			close(done)
+		}
+	}()
+
+	for ev := range events {
+		a.mu.Lock()
+		switch ev.Type {
+		// Message lifecycle
+		case EventMessageStart:
+			partial = ev.Message
+			a.streamMessage = ev.Message
+
+		case EventMessageUpdate:
+			partial = ev.Message
+			a.streamMessage = ev.Message
+
+		case EventMessageEnd:
+			partial = nil
+			a.streamMessage = nil
+			if ev.Message != nil {
+				a.messages = append(a.messages, ev.Message)
+			}
+
+		// Tool execution lifecycle
+		case EventToolExecStart:
+			if ev.ToolID != "" {
+				a.pendingToolCalls[ev.ToolID] = struct{}{}
+			}
+
+		case EventToolExecEnd:
+			delete(a.pendingToolCalls, ev.ToolID)
+
+		// Turn end
+		case EventTurnEnd:
+			if msg, ok := ev.Message.(Message); ok {
+				if errStr, _ := msg.Metadata["error_message"].(string); errStr != "" {
+					a.lastError = errStr
+				}
+			}
+
+		// Error — construct fallback assistant message
+		case EventError:
+			if ev.Err != nil {
+				a.lastError = ev.Err.Error()
+				// Construct error fallback message
+				errMsg := Message{
+					Role:    RoleAssistant,
+					Content: "",
+					Metadata: map[string]any{
+						"stop_reason":   "error",
+						"error_message": ev.Err.Error(),
+					},
+					Timestamp: time.Now(),
+				}
+				a.messages = append(a.messages, errMsg)
+			}
+
+		case EventAgentEnd:
+			a.isRunning = false
+			a.streamMessage = nil
+			a.pendingToolCalls = make(map[string]struct{})
+		}
+
+		// Copy listeners to avoid holding lock during callback
+		listeners := make([]func(Event), len(a.listeners))
+		copy(listeners, a.listeners)
+		a.mu.Unlock()
+
+		for _, fn := range listeners {
+			if fn != nil {
+				fn(ev)
+			}
+		}
+	}
+}

@@ -1,42 +1,57 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
-	"github.com/voocel/mas/agent"
+	"github.com/voocel/mas"
 	"github.com/voocel/mas/llm"
-	"github.com/voocel/mas/runner"
-	"github.com/voocel/mas/schema"
-	"github.com/voocel/mas/tools/builtin"
+	"github.com/voocel/mas/tools"
 )
 
 func main() {
-	model := llm.NewOpenAIModel(
-		"gpt-5",
-		os.Getenv("OPENAI_API_KEY"),
-		os.Getenv("OPENAI_API_BASE_URL"),
-	)
-
-	ag := agent.New(
-		"assistant",
-		"assistant",
-		agent.WithSystemPrompt("You are a friendly assistant who explains and calculates clearly."),
-		agent.WithTools(builtin.NewCalculator()),
-	)
-
-	r := runner.New(runner.Config{Model: model})
-
-	ctx := context.Background()
-	resp, err := r.Run(ctx, ag, schema.Message{
-		Role:    schema.RoleUser,
-		Content: "Calculate 15 * 8 + 7",
-	})
-	if err != nil {
-		fmt.Printf("error: %v\n", err)
-		return
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		fmt.Fprintln(os.Stderr, "OPENAI_API_KEY not set")
+		os.Exit(1)
 	}
 
-	fmt.Println(resp.Content)
+	model := llm.NewOpenAIModel("gpt-4.1-mini", apiKey)
+
+	agent := mas.NewAgent(
+		mas.WithModel(model),
+		mas.WithSystemPrompt("You are a helpful coding assistant. Use the provided tools to help users."),
+		mas.WithTools(
+			tools.NewRead(),
+			tools.NewWrite(),
+			tools.NewEdit(),
+			tools.NewBash("."),
+		),
+		mas.WithMaxTurns(20),
+	)
+
+	// Subscribe to events for output
+	agent.Subscribe(func(ev mas.Event) {
+		switch ev.Type {
+		case mas.EventMessageEnd:
+			if msg, ok := ev.Message.(mas.Message); ok && msg.Role == mas.RoleAssistant {
+				fmt.Printf("\nAssistant: %s\n", msg.Content)
+			}
+		case mas.EventToolExecStart:
+			fmt.Printf("  [tool] %s(%v)\n", ev.Tool, string(ev.Args.([]byte)))
+		case mas.EventToolExecEnd:
+			if ev.IsError {
+				fmt.Printf("  [tool] %s error\n", ev.Tool)
+			}
+		case mas.EventError:
+			fmt.Fprintf(os.Stderr, "Error: %v\n", ev.Err)
+		}
+	})
+
+	if err := agent.Prompt("List the files in the current directory and tell me what you see."); err != nil {
+		fmt.Fprintf(os.Stderr, "prompt error: %v\n", err)
+		os.Exit(1)
+	}
+
+	agent.WaitForIdle()
 }

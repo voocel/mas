@@ -1,0 +1,295 @@
+package memory
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/voocel/mas"
+)
+
+const (
+	defaultReserveTokens    = 16384
+	defaultKeepRecentTokens = 20000
+)
+
+// CompactionConfig configures automatic context compaction.
+type CompactionConfig struct {
+	// Model is the ChatModel used for generating summaries.
+	// Typically the same model the agent uses.
+	Model mas.ChatModel
+
+	// ContextWindow is the model's context window size in tokens.
+	// Required — there is no default.
+	ContextWindow int
+
+	// ReserveTokens is the token headroom reserved for the LLM response.
+	// Default: 16384.
+	ReserveTokens int
+
+	// KeepRecentTokens is the minimum number of recent tokens to always keep.
+	// Default: 20000.
+	KeepRecentTokens int
+}
+
+// NewCompaction returns a TransformContext function that automatically compacts
+// the message history when context tokens approach the window limit.
+//
+// Usage:
+//
+//	agent := mas.NewAgent(
+//	    mas.WithTransformContext(memory.NewCompaction(memory.CompactionConfig{
+//	        Model:         model,
+//	        ContextWindow: 128000,
+//	    })),
+//	    mas.WithConvertToLLM(memory.CompactionConvertToLLM),
+//	)
+func NewCompaction(cfg CompactionConfig) func(context.Context, []mas.AgentMessage) ([]mas.AgentMessage, error) {
+	if cfg.ReserveTokens <= 0 {
+		cfg.ReserveTokens = defaultReserveTokens
+	}
+	if cfg.KeepRecentTokens <= 0 {
+		cfg.KeepRecentTokens = defaultKeepRecentTokens
+	}
+
+	return func(ctx context.Context, msgs []mas.AgentMessage) ([]mas.AgentMessage, error) {
+		if len(msgs) == 0 || cfg.Model == nil {
+			return msgs, nil
+		}
+
+		tokens := EstimateTotal(msgs)
+		threshold := cfg.ContextWindow - cfg.ReserveTokens
+		if threshold <= 0 || tokens <= threshold {
+			return msgs, nil
+		}
+
+		cut := findCutPoint(msgs, cfg.KeepRecentTokens)
+		if cut.firstKeptIndex <= 0 {
+			return msgs, nil // nothing to compact
+		}
+
+		// Determine what to summarize vs keep.
+		// If split turn: history ends at turn start, turn prefix is [turnStart:firstKept].
+		historyEnd := cut.firstKeptIndex
+		if cut.isSplitTurn && cut.turnStartIndex >= 0 {
+			historyEnd = cut.turnStartIndex
+		}
+
+		toSummarize := msgs[:historyEnd]
+		toKeep := msgs[cut.firstKeptIndex:]
+
+		// Find previous CompactionSummary for incremental update
+		var previousSummary string
+		for _, m := range toSummarize {
+			if cs, ok := m.(CompactionSummary); ok {
+				previousSummary = cs.Summary
+			}
+		}
+
+		// Generate history summary
+		summary, err := generateSummary(ctx, cfg.Model, toSummarize, previousSummary)
+		if err != nil {
+			return nil, fmt.Errorf("compaction: %w", err)
+		}
+
+		// If split turn, generate turn prefix summary and merge
+		if cut.isSplitTurn && cut.turnStartIndex >= 0 {
+			turnPrefix := msgs[cut.turnStartIndex:cut.firstKeptIndex]
+			if len(turnPrefix) > 0 {
+				prefixSummary, err := generateTurnPrefixSummary(ctx, cfg.Model, turnPrefix)
+				if err == nil && prefixSummary != "" {
+					summary += "\n\n---\n\n**Turn Context (split turn):**\n\n" + prefixSummary
+				}
+			}
+		}
+
+		// Extract file ops from ALL compacted messages (history + turn prefix)
+		allCompacted := msgs[:cut.firstKeptIndex]
+		readFiles, modifiedFiles := extractFileOps(allCompacted)
+		summary += formatFileOps(readFiles, modifiedFiles)
+
+		cs := CompactionSummary{
+			Summary:       summary,
+			TokensBefore:  tokens,
+			ReadFiles:     readFiles,
+			ModifiedFiles: modifiedFiles,
+			Timestamp:     time.Now(),
+		}
+
+		result := make([]mas.AgentMessage, 0, 1+len(toKeep))
+		result = append(result, cs)
+		result = append(result, toKeep...)
+		return result, nil
+	}
+}
+
+// cutResult holds the result of findCutPoint, including turn split information.
+type cutResult struct {
+	// firstKeptIndex is the index of the first message to keep.
+	firstKeptIndex int
+	// turnStartIndex is the index where the current turn starts, or -1 if
+	// the cut is at a turn boundary (user message).
+	turnStartIndex int
+	// isSplitTurn is true when the cut falls in the middle of a turn.
+	// In this case, msgs[turnStartIndex:firstKeptIndex] is the turn prefix
+	// that needs a separate summary.
+	isSplitTurn bool
+}
+
+// findCutPoint walks backwards from the end, accumulating tokens until
+// keepTokens is reached. Returns the cut result with turn-awareness.
+//
+// Rules:
+//   - Never cut between an assistant message (with tool calls) and its tool results
+//   - Prefer cutting at user message boundaries
+//   - Detect split turns and report the turn start index
+func findCutPoint(msgs []mas.AgentMessage, keepTokens int) cutResult {
+	if len(msgs) == 0 {
+		return cutResult{}
+	}
+
+	accumulated := 0
+	cutIndex := len(msgs) // start past end
+
+	// Walk backwards
+	for i := len(msgs) - 1; i >= 0; i-- {
+		accumulated += EstimateTokens(msgs[i])
+		if accumulated >= keepTokens {
+			cutIndex = i
+			break
+		}
+	}
+
+	// If we couldn't accumulate enough, keep everything
+	if cutIndex >= len(msgs) {
+		return cutResult{}
+	}
+
+	// Align to a valid cut point: walk forward to find a user message boundary
+	// Never split tool pair (assistant with toolCalls + following tool results)
+	for cutIndex < len(msgs) {
+		msg := msgs[cutIndex]
+		if m, ok := msg.(mas.Message); ok {
+			// Don't cut at a tool result — it belongs to the previous assistant
+			if m.Role == mas.RoleTool {
+				cutIndex++
+				continue
+			}
+			// Good cut point: user message
+			if m.Role == mas.RoleUser {
+				break
+			}
+			// Assistant message with tool calls: skip past all its tool results
+			if m.Role == mas.RoleAssistant && m.HasToolCalls() {
+				cutIndex++
+				for cutIndex < len(msgs) {
+					if next, ok := msgs[cutIndex].(mas.Message); ok && next.Role == mas.RoleTool {
+						cutIndex++
+					} else {
+						break
+					}
+				}
+				continue
+			}
+			// Assistant without tool calls — valid cut point
+			break
+		}
+		// CompactionSummary or other custom type — valid cut point
+		break
+	}
+
+	// Safety: don't compact everything
+	if cutIndex >= len(msgs) {
+		return cutResult{}
+	}
+
+	// Detect split turn: if cut is not at a user message, find the turn start
+	isSplitTurn := false
+	turnStartIndex := -1
+	if m, ok := msgs[cutIndex].(mas.Message); !ok || m.Role != mas.RoleUser {
+		// Walk backwards from cutIndex to find the user message that started this turn
+		for i := cutIndex - 1; i >= 0; i-- {
+			if um, ok := msgs[i].(mas.Message); ok && um.Role == mas.RoleUser {
+				turnStartIndex = i
+				isSplitTurn = true
+				break
+			}
+		}
+	}
+
+	return cutResult{
+		firstKeptIndex: cutIndex,
+		turnStartIndex: turnStartIndex,
+		isSplitTurn:    isSplitTurn,
+	}
+}
+
+// extractFileOps scans messages for tool calls and extracts file paths.
+func extractFileOps(msgs []mas.AgentMessage) (readFiles, modifiedFiles []string) {
+	readSet := make(map[string]struct{})
+	modifiedSet := make(map[string]struct{})
+
+	for _, m := range msgs {
+		msg, ok := m.(mas.Message)
+		if !ok || msg.Role != mas.RoleAssistant {
+			continue
+		}
+		for _, tc := range msg.ToolCalls {
+			path := extractPathArg(tc.Args)
+			if path == "" {
+				continue
+			}
+			switch tc.Name {
+			case "read":
+				readSet[path] = struct{}{}
+			case "write":
+				modifiedSet[path] = struct{}{}
+			case "edit":
+				modifiedSet[path] = struct{}{}
+			}
+		}
+	}
+
+	// Read-only files: read but not modified
+	for f := range readSet {
+		if _, modified := modifiedSet[f]; !modified {
+			readFiles = append(readFiles, f)
+		}
+	}
+	for f := range modifiedSet {
+		modifiedFiles = append(modifiedFiles, f)
+	}
+
+	slices.Sort(readFiles)
+	slices.Sort(modifiedFiles)
+	return
+}
+
+// extractPathArg extracts the "path" field from JSON tool args.
+func extractPathArg(args json.RawMessage) string {
+	var obj struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(args, &obj) == nil {
+		return obj.Path
+	}
+	return ""
+}
+
+// formatFileOps formats file operation lists as XML tags appended to the summary.
+func formatFileOps(readFiles, modifiedFiles []string) string {
+	if len(readFiles) == 0 && len(modifiedFiles) == 0 {
+		return ""
+	}
+	var s string
+	if len(readFiles) > 0 {
+		s += "\n\n<read-files>\n" + strings.Join(readFiles, "\n") + "\n</read-files>"
+	}
+	if len(modifiedFiles) > 0 {
+		s += "\n\n<modified-files>\n" + strings.Join(modifiedFiles, "\n") + "\n</modified-files>"
+	}
+	return s
+}

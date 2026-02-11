@@ -67,7 +67,7 @@ func main() {
 		switch ev.Type {
 		case mas.EventMessageEnd:
 			if msg, ok := ev.Message.(mas.Message); ok && msg.Role == mas.RoleAssistant {
-				fmt.Printf("\nAssistant: %s\n", msg.Content)
+				fmt.Printf("\nAssistant: %s\n", msg.TextContent())
 			}
 		case mas.EventToolExecStart:
 			fmt.Printf("  [tool] %s\n", ev.Tool)

@@ -3,6 +3,7 @@ package mas
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,10 @@ func ReportToolProgress(ctx context.Context, partial json.RawMessage) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Roles
+// ---------------------------------------------------------------------------
+
 // Role defines message roles.
 type Role string
 
@@ -36,6 +41,100 @@ const (
 	RoleTool      Role = "tool"
 )
 
+// ---------------------------------------------------------------------------
+// Content Blocks
+// ---------------------------------------------------------------------------
+
+// ContentType identifies the kind of content in a ContentBlock.
+type ContentType string
+
+const (
+	ContentText     ContentType = "text"
+	ContentThinking ContentType = "thinking"
+	ContentToolCall ContentType = "toolCall"
+	ContentImage    ContentType = "image"
+)
+
+// ContentBlock is a tagged union for message content.
+// Exactly one payload field is populated, matching the Type value.
+type ContentBlock struct {
+	Type     ContentType `json:"type"`
+	Text     string      `json:"text,omitempty"`
+	Thinking string      `json:"thinking,omitempty"`
+	ToolCall *ToolCall   `json:"tool_call,omitempty"`
+	Image    *ImageData  `json:"image,omitempty"`
+}
+
+// ImageData holds base64-encoded image content.
+type ImageData struct {
+	Data     string `json:"data"`
+	MimeType string `json:"mime_type"`
+}
+
+// Block constructors
+
+func TextBlock(text string) ContentBlock {
+	return ContentBlock{Type: ContentText, Text: text}
+}
+
+func ThinkingBlock(thinking string) ContentBlock {
+	return ContentBlock{Type: ContentThinking, Thinking: thinking}
+}
+
+func ToolCallBlock(tc ToolCall) ContentBlock {
+	return ContentBlock{Type: ContentToolCall, ToolCall: &tc}
+}
+
+func ImageBlock(data, mimeType string) ContentBlock {
+	return ContentBlock{Type: ContentImage, Image: &ImageData{Data: data, MimeType: mimeType}}
+}
+
+// ---------------------------------------------------------------------------
+// Stop Reason
+// ---------------------------------------------------------------------------
+
+// StopReason indicates why the LLM stopped generating.
+type StopReason string
+
+const (
+	StopReasonStop    StopReason = "stop"
+	StopReasonLength  StopReason = "length"
+	StopReasonToolUse StopReason = "toolUse"
+	StopReasonError   StopReason = "error"
+	StopReasonAborted StopReason = "aborted"
+)
+
+// ---------------------------------------------------------------------------
+// Usage
+// ---------------------------------------------------------------------------
+
+// Usage tracks token consumption for an LLM call.
+type Usage struct {
+	Input       int `json:"input"`
+	Output      int `json:"output"`
+	CacheRead   int `json:"cache_read"`
+	CacheWrite  int `json:"cache_write"`
+	TotalTokens int `json:"total_tokens"`
+}
+
+// ---------------------------------------------------------------------------
+// Thinking Level
+// ---------------------------------------------------------------------------
+
+// ThinkingLevel configures the reasoning depth for models that support it.
+type ThinkingLevel string
+
+const (
+	ThinkingOff    ThinkingLevel = "off"
+	ThinkingLow    ThinkingLevel = "low"
+	ThinkingMedium ThinkingLevel = "medium"
+	ThinkingHigh   ThinkingLevel = "high"
+)
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
 // AgentMessage is the app-layer message abstraction.
 // Message implements this interface. Users can define custom types
 // (e.g. status notifications, UI hints) that flow through the context
@@ -45,21 +144,105 @@ type AgentMessage interface {
 	GetTimestamp() time.Time
 }
 
-// Message is an LLM-level message.
+// Message is an LLM-level message with structured content blocks.
 type Message struct {
 	Role       Role           `json:"role"`
-	Content    string         `json:"content"`
-	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
-	StopReason string         `json:"stop_reason,omitempty"`
+	Content    []ContentBlock `json:"content"`
+	StopReason StopReason     `json:"stop_reason,omitempty"`
+	Usage      *Usage         `json:"usage,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
 	Timestamp  time.Time      `json:"timestamp"`
 }
 
 func (m Message) GetRole() Role           { return m.Role }
-func (m Message) GetTimestamp() time.Time { return m.Timestamp }
+func (m Message) GetTimestamp() time.Time  { return m.Timestamp }
 
-// HasToolCalls reports whether tool calls are present.
-func (m Message) HasToolCalls() bool { return len(m.ToolCalls) > 0 }
+// TextContent returns the concatenated text from all text blocks.
+func (m Message) TextContent() string {
+	var sb strings.Builder
+	for _, b := range m.Content {
+		if b.Type == ContentText {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
+}
+
+// ThinkingContent returns the concatenated thinking text.
+func (m Message) ThinkingContent() string {
+	var sb strings.Builder
+	for _, b := range m.Content {
+		if b.Type == ContentThinking {
+			sb.WriteString(b.Thinking)
+		}
+	}
+	return sb.String()
+}
+
+// ToolCalls returns all tool call blocks.
+func (m Message) ToolCalls() []ToolCall {
+	var calls []ToolCall
+	for _, b := range m.Content {
+		if b.Type == ContentToolCall && b.ToolCall != nil {
+			calls = append(calls, *b.ToolCall)
+		}
+	}
+	return calls
+}
+
+// HasToolCalls reports whether any tool call blocks exist.
+func (m Message) HasToolCalls() bool {
+	for _, b := range m.Content {
+		if b.Type == ContentToolCall {
+			return true
+		}
+	}
+	return false
+}
+
+// IsEmpty reports whether the message has no meaningful content.
+func (m Message) IsEmpty() bool {
+	return len(m.Content) == 0
+}
+
+// ---------------------------------------------------------------------------
+// Message Constructors
+// ---------------------------------------------------------------------------
+
+// UserMsg creates a user message from plain text.
+func UserMsg(text string) Message {
+	return Message{
+		Role:      RoleUser,
+		Content:   []ContentBlock{TextBlock(text)},
+		Timestamp: time.Now(),
+	}
+}
+
+// SystemMsg creates a system message.
+func SystemMsg(text string) Message {
+	return Message{
+		Role:      RoleSystem,
+		Content:   []ContentBlock{TextBlock(text)},
+		Timestamp: time.Now(),
+	}
+}
+
+// ToolResultMsg creates a tool result message.
+func ToolResultMsg(toolCallID string, content json.RawMessage, isError bool) Message {
+	return Message{
+		Role:    RoleTool,
+		Content: []ContentBlock{TextBlock(string(content))},
+		Metadata: map[string]any{
+			"tool_call_id": toolCallID,
+			"is_error":     isError,
+		},
+		Timestamp: time.Now(),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tool Calls & Results
+// ---------------------------------------------------------------------------
 
 // ToolCall represents a tool invocation request from the LLM.
 type ToolCall struct {
@@ -75,6 +258,10 @@ type ToolResult struct {
 	IsError    bool            `json:"is_error,omitempty"`
 }
 
+// ---------------------------------------------------------------------------
+// Tool Interface
+// ---------------------------------------------------------------------------
+
 // Tool defines the minimal tool interface.
 // Timeout control goes through context.Context.
 // Tools can report execution progress via ReportToolProgress(ctx, partial).
@@ -86,7 +273,6 @@ type Tool interface {
 }
 
 // ToolLabeler is an optional interface for tools to provide a human-readable label.
-// Used by UI consumers for display purposes (e.g. "Read File" instead of "read").
 type ToolLabeler interface {
 	Label() string
 }
@@ -110,6 +296,10 @@ func (t *FuncTool) Execute(ctx context.Context, args json.RawMessage) (json.RawM
 	return t.fn(ctx, args)
 }
 
+// ---------------------------------------------------------------------------
+// Agent Context & Loop Config
+// ---------------------------------------------------------------------------
+
 // AgentContext holds the immutable context for a single agent loop invocation.
 type AgentContext struct {
 	SystemPrompt string
@@ -119,7 +309,6 @@ type AgentContext struct {
 
 // StreamFn is an injectable LLM call function.
 // When nil, the loop uses model.Generate / model.GenerateStream directly.
-// Use this to swap in a proxy, mock, or custom implementation.
 type StreamFn func(ctx context.Context, req *LLMRequest) (*LLMResponse, error)
 
 // LLMRequest is the request passed to StreamFn.
@@ -141,61 +330,113 @@ type ToolSpec struct {
 }
 
 // LoopConfig configures the agent loop.
-// Replaces Runner.Config + Middleware + Observer + Tracer with function hooks.
 type LoopConfig struct {
-	Model    ChatModel
-	StreamFn StreamFn // nil = use Model directly
-	MaxTurns int      // safety limit, default 10
+	Model         ChatModel
+	StreamFn      StreamFn      // nil = use Model directly
+	MaxTurns      int           // safety limit, default 10
+	ThinkingLevel ThinkingLevel // reasoning depth
 
 	// Two-stage pipeline: TransformContext → ConvertToLLM
-	// TransformContext operates on AgentMessage[] (prune, inject external context).
-	// ConvertToLLM filters to LLM-compatible Message[] at the call boundary.
 	TransformContext func(ctx context.Context, msgs []AgentMessage) ([]AgentMessage, error)
 	ConvertToLLM     func(msgs []AgentMessage) []Message
 
 	// Steering: called after each tool execution to check for user interruptions.
-	// If messages are returned, remaining tool calls are skipped.
 	GetSteeringMessages func() []AgentMessage
 
 	// FollowUp: called when the agent would otherwise stop.
-	// If messages are returned, the agent continues with another turn.
 	GetFollowUpMessages func() []AgentMessage
 }
 
+// ---------------------------------------------------------------------------
+// Call Options
+// ---------------------------------------------------------------------------
+
+// CallOption configures per-call LLM parameters.
+type CallOption func(*CallConfig)
+
+// CallConfig holds per-call configuration resolved from CallOptions.
+type CallConfig struct {
+	ThinkingLevel ThinkingLevel
+}
+
+// ResolveCallConfig applies options and returns the resolved config.
+func ResolveCallConfig(opts []CallOption) CallConfig {
+	var cfg CallConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
+
+// WithThinking sets the thinking level for a single LLM call.
+func WithThinking(level ThinkingLevel) CallOption {
+	return func(c *CallConfig) { c.ThinkingLevel = level }
+}
+
+// ---------------------------------------------------------------------------
+// ChatModel Interface
+// ---------------------------------------------------------------------------
+
 // ChatModel is the LLM provider interface.
 type ChatModel interface {
-	Generate(ctx context.Context, messages []Message, tools []ToolSpec) (*LLMResponse, error)
-	GenerateStream(ctx context.Context, messages []Message, tools []ToolSpec) (<-chan StreamEvent, error)
+	Generate(ctx context.Context, messages []Message, tools []ToolSpec, opts ...CallOption) (*LLMResponse, error)
+	GenerateStream(ctx context.Context, messages []Message, tools []ToolSpec, opts ...CallOption) (<-chan StreamEvent, error)
 	SupportsTools() bool
 }
 
-// StreamEvent is a streaming event from the LLM.
-type StreamEvent struct {
-	Type       StreamEventType
-	Delta      string  // text delta for token events
-	Message    Message // final message for done events
-	StopReason string  // finish reason from LLM provider (for done events)
-	Err        error   // error for error events
-}
+// ---------------------------------------------------------------------------
+// Stream Events (fine-grained)
+// ---------------------------------------------------------------------------
 
 // StreamEventType identifies LLM streaming event types.
 type StreamEventType string
 
 const (
-	StreamEventToken StreamEventType = "token"
+	// Text content streaming
+	StreamEventTextStart StreamEventType = "text_start"
+	StreamEventTextDelta StreamEventType = "text_delta"
+	StreamEventTextEnd   StreamEventType = "text_end"
+
+	// Thinking/reasoning streaming
+	StreamEventThinkingStart StreamEventType = "thinking_start"
+	StreamEventThinkingDelta StreamEventType = "thinking_delta"
+	StreamEventThinkingEnd   StreamEventType = "thinking_end"
+
+	// Tool call streaming
+	StreamEventToolCallStart StreamEventType = "toolcall_start"
+	StreamEventToolCallDelta StreamEventType = "toolcall_delta"
+	StreamEventToolCallEnd   StreamEventType = "toolcall_end"
+
+	// Terminal events
 	StreamEventDone  StreamEventType = "done"
 	StreamEventError StreamEventType = "error"
 )
+
+// StreamEvent is a streaming event from the LLM.
+type StreamEvent struct {
+	Type         StreamEventType
+	ContentIndex int        // which content block is being updated
+	Delta        string     // text/thinking/toolcall argument delta
+	Message      Message    // partial (during streaming) or final (done)
+	StopReason   StopReason // finish reason (for done events)
+	Err          error      // for error events
+}
+
+// ---------------------------------------------------------------------------
+// Queue Mode
+// ---------------------------------------------------------------------------
 
 // QueueMode controls how steering/follow-up queues are drained.
 type QueueMode string
 
 const (
-	// QueueModeAll drains all queued messages at once (default).
-	QueueModeAll QueueMode = "all"
-	// QueueModeOneAtATime drains one message per turn, letting the agent respond to each individually.
+	QueueModeAll        QueueMode = "all"
 	QueueModeOneAtATime QueueMode = "one-at-a-time"
 )
+
+// ---------------------------------------------------------------------------
+// Agent Events
+// ---------------------------------------------------------------------------
 
 // EventType identifies agent lifecycle event types.
 type EventType string
@@ -216,14 +457,13 @@ const (
 
 // Event is a lifecycle event emitted by the agent loop.
 // This is the single output channel for all lifecycle information.
-// Consumers (TUI, Slack bot, Web UI, logging) subscribe and filter by Type.
 type Event struct {
 	Type        EventType
-	Message     AgentMessage // for message_start/update/end, turn_end, agent_end
+	Message     AgentMessage // for message_start/update/end, turn_end
 	Delta       string       // text delta for message_update
 	ToolID      string       // for tool_exec_*
 	Tool        string       // tool name for tool_exec_*
-	ToolLabel   string       // human-readable tool label for tool_exec_* (from ToolLabeler)
+	ToolLabel   string       // human-readable tool label (from ToolLabeler)
 	Args        any          // tool args for tool_exec_start
 	Result      any          // tool result for tool_exec_end/update
 	IsError     bool         // tool error flag for tool_exec_end

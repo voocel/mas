@@ -237,7 +237,7 @@ func extractFileOps(msgs []mas.AgentMessage) (readFiles, modifiedFiles []string)
 		if !ok || msg.Role != mas.RoleAssistant {
 			continue
 		}
-		for _, tc := range msg.ToolCalls {
+		for _, tc := range msg.ToolCalls() {
 			path := extractPathArg(tc.Args)
 			if path == "" {
 				continue

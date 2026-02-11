@@ -265,7 +265,7 @@ func (t *SubAgentTool) runAgent(ctx context.Context, agentName, task string) (st
 		return "", fmt.Errorf("unknown agent %q, available: %s", agentName, strings.Join(available, ", "))
 	}
 
-	userMsg := Message{Role: RoleUser, Content: task}
+	userMsg := UserMsg(task)
 
 	agentCtx := AgentContext{
 		SystemPrompt: cfg.SystemPrompt,
@@ -291,7 +291,7 @@ func (t *SubAgentTool) runAgent(ctx context.Context, agentName, task string) (st
 		switch ev.Type {
 		case EventMessageEnd:
 			if msg, ok := ev.Message.(Message); ok && msg.Role == RoleAssistant {
-				lastAssistantContent = msg.Content
+				lastAssistantContent = msg.TextContent()
 			}
 		case EventError:
 			if ev.Err != nil {

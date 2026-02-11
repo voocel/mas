@@ -136,14 +136,14 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 			*newMessages = append(*newMessages, assistantMsg)
 
 			// Check stop reason — terminate early on error/aborted
-			if assistantMsg.StopReason == "error" || assistantMsg.StopReason == "aborted" {
+			if assistantMsg.StopReason == StopReasonError || assistantMsg.StopReason == StopReasonAborted {
 				emit(ch, Event{Type: EventTurnEnd, Message: assistantMsg})
 				emit(ch, Event{Type: EventAgentEnd, Data: *newMessages})
 				return
 			}
 
 			// Check for tool calls
-			toolCalls := assistantMsg.ToolCalls
+			toolCalls := assistantMsg.ToolCalls()
 			hasMoreToolCalls = len(toolCalls) > 0
 
 			var turnToolResults []ToolResult
@@ -190,7 +190,6 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 }
 
 // callLLM applies the two-stage pipeline and calls the model.
-// It streams assistant responses via message_start/update/end events
 func callLLM(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch chan<- Event) (Message, error) {
 	messages := agentCtx.Messages
 
@@ -215,11 +214,7 @@ func callLLM(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch 
 
 	// Prepend system prompt as first message if set
 	if agentCtx.SystemPrompt != "" {
-		systemMsg := Message{
-			Role:    RoleSystem,
-			Content: agentCtx.SystemPrompt,
-		}
-		llmMessages = append([]Message{systemMsg}, llmMessages...)
+		llmMessages = append([]Message{SystemMsg(agentCtx.SystemPrompt)}, llmMessages...)
 	}
 
 	// Call via StreamFn (non-streaming shortcut, e.g. mock/proxy)
@@ -242,16 +237,23 @@ func callLLM(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch 
 		return Message{}, fmt.Errorf("no model configured")
 	}
 
-	// Use streaming for real-time token deltas (drives TUI/UI)
-	return callLLMStream(ctx, config.Model, llmMessages, toolSpecs, ch)
+	// Build per-call options
+	var callOpts []CallOption
+	if config.ThinkingLevel != "" && config.ThinkingLevel != ThinkingOff {
+		callOpts = append(callOpts, WithThinking(config.ThinkingLevel))
+	}
+
+	// Use streaming for real-time token deltas
+	return callLLMStream(ctx, config.Model, llmMessages, toolSpecs, callOpts, ch)
 }
 
-// callLLMStream uses GenerateStream and emits real-time message_start/update/end events.
-func callLLMStream(ctx context.Context, model ChatModel, messages []Message, tools []ToolSpec, ch chan<- Event) (Message, error) {
-	streamCh, err := model.GenerateStream(ctx, messages, tools)
+// callLLMStream uses GenerateStream and emits real-time events.
+// The adapter builds partial Messages with ContentBlocks and emits fine-grained StreamEvents.
+func callLLMStream(ctx context.Context, model ChatModel, messages []Message, tools []ToolSpec, opts []CallOption, ch chan<- Event) (Message, error) {
+	streamCh, err := model.GenerateStream(ctx, messages, tools, opts...)
 	if err != nil {
 		// Fallback to non-streaming
-		resp, err := model.Generate(ctx, messages, tools)
+		resp, err := model.Generate(ctx, messages, tools, opts...)
 		if err != nil {
 			return Message{}, err
 		}
@@ -261,18 +263,28 @@ func callLLMStream(ctx context.Context, model ChatModel, messages []Message, too
 
 	var (
 		started bool
-		partial = Message{Role: RoleAssistant, Timestamp: time.Now()}
+		partial Message
 	)
 
 	for ev := range streamCh {
 		switch ev.Type {
-		case StreamEventToken:
+		case StreamEventTextStart, StreamEventThinkingStart, StreamEventToolCallStart:
+			partial = ev.Message
 			if !started {
 				started = true
 				emit(ch, Event{Type: EventMessageStart, Message: partial})
 			}
-			partial.Content += ev.Delta
+
+		case StreamEventTextDelta, StreamEventThinkingDelta, StreamEventToolCallDelta:
+			partial = ev.Message
+			if !started {
+				started = true
+				emit(ch, Event{Type: EventMessageStart, Message: partial})
+			}
 			emit(ch, Event{Type: EventMessageUpdate, Message: partial, Delta: ev.Delta})
+
+		case StreamEventTextEnd, StreamEventThinkingEnd, StreamEventToolCallEnd:
+			partial = ev.Message
 
 		case StreamEventDone:
 			finalMsg := ev.Message
@@ -409,7 +421,12 @@ func skipToolCall(call ToolCall, tools []Tool, ch chan<- Event) ToolResult {
 	return result
 }
 
-// toolLabel returns the human-readable label for a tool, or empty string if not available.
+// toolResultToMessage converts a ToolResult into a Message for the context.
+func toolResultToMessage(tr ToolResult) Message {
+	return ToolResultMsg(tr.ToolCallID, tr.Content, tr.IsError)
+}
+
+// toolLabel returns the human-readable label for a tool.
 func toolLabel(tool Tool) string {
 	if tool == nil {
 		return ""
@@ -418,19 +435,6 @@ func toolLabel(tool Tool) string {
 		return labeler.Label()
 	}
 	return ""
-}
-
-// toolResultToMessage converts a ToolResult into a Message for the context.
-func toolResultToMessage(tr ToolResult) Message {
-	return Message{
-		Role:    RoleTool,
-		Content: string(tr.Content),
-		Metadata: map[string]any{
-			"tool_call_id": tr.ToolCallID,
-			"is_error":     tr.IsError,
-		},
-		Timestamp: time.Now(),
-	}
 }
 
 // buildToolSpecs converts Tool interfaces to ToolSpec for the LLM.

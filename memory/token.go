@@ -9,9 +9,17 @@ func EstimateTokens(msg mas.AgentMessage) int {
 
 	switch v := msg.(type) {
 	case mas.Message:
-		chars = len(v.Content)
-		for _, tc := range v.ToolCalls {
-			chars += len(tc.Name) + len(tc.Args)
+		for _, b := range v.Content {
+			switch b.Type {
+			case mas.ContentText:
+				chars += len(b.Text)
+			case mas.ContentThinking:
+				chars += len(b.Thinking)
+			case mas.ContentToolCall:
+				if b.ToolCall != nil {
+					chars += len(b.ToolCall.Name) + len(b.ToolCall.Args)
+				}
+			}
 		}
 	case CompactionSummary:
 		chars = len(v.Summary)

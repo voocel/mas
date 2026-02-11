@@ -30,7 +30,7 @@ func CompactionConvertToLLM(msgs []mas.AgentMessage) []mas.Message {
 		case CompactionSummary:
 			out = append(out, mas.Message{
 				Role:    mas.RoleUser,
-				Content: "<context-summary>\n" + v.Summary + "\n</context-summary>",
+				Content: []mas.ContentBlock{mas.TextBlock("<context-summary>\n" + v.Summary + "\n</context-summary>")},
 				Metadata: map[string]any{
 					"type":           "compaction_summary",
 					"tokens_before":  v.TokensBefore,

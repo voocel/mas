@@ -108,13 +108,13 @@ func generateTurnPrefixSummary(ctx context.Context, model mas.ChatModel, msgs []
 	userPrompt := "<conversation>\n" + conversation + "\n</conversation>\n\n" + turnPrefixPrompt
 
 	resp, err := model.Generate(ctx, []mas.Message{
-		{Role: mas.RoleSystem, Content: summarySystemPrompt},
-		{Role: mas.RoleUser, Content: userPrompt},
+		mas.SystemMsg(summarySystemPrompt),
+		mas.UserMsg(userPrompt),
 	}, nil)
 	if err != nil {
 		return "", fmt.Errorf("turn prefix summarization failed: %w", err)
 	}
-	return strings.TrimSpace(resp.Message.Content), nil
+	return strings.TrimSpace(resp.Message.TextContent()), nil
 }
 
 // generateSummary calls the ChatModel to produce a conversation summary.
@@ -136,14 +136,14 @@ func generateSummary(ctx context.Context, model mas.ChatModel, msgs []mas.AgentM
 	}
 
 	resp, err := model.Generate(ctx, []mas.Message{
-		{Role: mas.RoleSystem, Content: summarySystemPrompt},
-		{Role: mas.RoleUser, Content: userPrompt},
+		mas.SystemMsg(summarySystemPrompt),
+		mas.UserMsg(userPrompt),
 	}, nil)
 	if err != nil {
 		return "", fmt.Errorf("summarization failed: %w", err)
 	}
 
-	summary := strings.TrimSpace(resp.Message.Content)
+	summary := strings.TrimSpace(resp.Message.TextContent())
 	if summary == "" {
 		return "", fmt.Errorf("summarization returned empty content")
 	}
@@ -182,22 +182,22 @@ func serializeConversation(msgs []mas.AgentMessage) string {
 		case mas.Message:
 			switch v.Role {
 			case mas.RoleUser:
-				if v.Content != "" {
-					parts = append(parts, "[User]: "+v.Content)
+				if text := v.TextContent(); text != "" {
+					parts = append(parts, "[User]: "+text)
 				}
 			case mas.RoleAssistant:
-				if v.Content != "" {
-					parts = append(parts, "[Assistant]: "+v.Content)
+				if text := v.TextContent(); text != "" {
+					parts = append(parts, "[Assistant]: "+text)
 				}
-				if len(v.ToolCalls) > 0 {
+				if toolCalls := v.ToolCalls(); len(toolCalls) > 0 {
 					var calls []string
-					for _, tc := range v.ToolCalls {
+					for _, tc := range toolCalls {
 						calls = append(calls, tc.Name+"("+formatArgsKeyValue(tc.Args)+")")
 					}
 					parts = append(parts, "[Assistant tool calls]: "+strings.Join(calls, "; "))
 				}
 			case mas.RoleTool:
-				content := v.Content
+				content := v.TextContent()
 				if len(content) > 500 {
 					content = content[:497] + "..."
 				}

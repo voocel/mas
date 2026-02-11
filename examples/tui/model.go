@@ -158,7 +158,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		if m.running {
 			// Steer: inject message while agent is running
-			m.agent.Steer(mas.Message{Role: mas.RoleUser, Content: text})
+			m.agent.Steer(mas.UserMsg(text))
 		} else {
 			// New prompt
 			m.blocks = append(m.blocks, block{
@@ -239,10 +239,10 @@ func (m model) handleAgentEvent(ev mas.Event) (tea.Model, tea.Cmd) {
 			m.streaming.Reset()
 		} else if role == mas.RoleUser {
 			// Steer message echoed back
-			if msg, ok := ev.Message.(mas.Message); ok && msg.Content != "" {
+			if msg, ok := ev.Message.(mas.Message); ok && !msg.IsEmpty() {
 				m.blocks = append(m.blocks, block{
 					kind:    blockUser,
-					content: userPrefixStyle.Render("> You") + "\n" + msg.Content,
+					content: userPrefixStyle.Render("> You") + "\n" + msg.TextContent(),
 				})
 			}
 		}

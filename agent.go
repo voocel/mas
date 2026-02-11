@@ -26,6 +26,7 @@ type Agent struct {
 	systemPrompt     string
 	tools            []Tool
 	maxTurns         int
+	thinkingLevel    ThinkingLevel
 	streamFn         StreamFn
 	transformContext func(ctx context.Context, msgs []AgentMessage) ([]AgentMessage, error)
 	convertToLLM     func([]AgentMessage) []Message
@@ -79,12 +80,7 @@ func (a *Agent) Subscribe(fn func(Event)) func() {
 
 // Prompt starts a new conversation turn with the given input.
 func (a *Agent) Prompt(input string) error {
-	msg := Message{
-		Role:      RoleUser,
-		Content:   input,
-		Timestamp: time.Now(),
-	}
-	return a.PromptMessages(msg)
+	return a.PromptMessages(UserMsg(input))
 }
 
 // PromptMessages starts a new conversation turn with arbitrary AgentMessages.
@@ -246,6 +242,7 @@ func (a *Agent) buildConfig() LoopConfig {
 		Model:            a.model,
 		StreamFn:         a.streamFn,
 		MaxTurns:         a.maxTurns,
+		ThinkingLevel:    a.thinkingLevel,
 		TransformContext: a.transformContext,
 		ConvertToLLM:     a.convertToLLM,
 		GetSteeringMessages: func() []AgentMessage {
@@ -273,7 +270,7 @@ func (a *Agent) consumeLoop(events <-chan Event) {
 		// If stream ended with an unfinished partial, append it to messages
 		if partial != nil {
 			if msg, ok := partial.(Message); ok {
-				if msg.Content != "" || len(msg.ToolCalls) > 0 {
+				if !msg.IsEmpty() {
 					a.messages = append(a.messages, partial)
 				}
 			}
@@ -333,10 +330,9 @@ func (a *Agent) consumeLoop(events <-chan Event) {
 				a.lastError = ev.Err.Error()
 				// Construct error fallback message
 				errMsg := Message{
-					Role:    RoleAssistant,
-					Content: "",
+					Role:       RoleAssistant,
+					StopReason: StopReasonError,
 					Metadata: map[string]any{
-						"stop_reason":   "error",
 						"error_message": ev.Err.Error(),
 					},
 					Timestamp: time.Now(),

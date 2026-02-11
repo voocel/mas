@@ -80,23 +80,21 @@ func (m *BaseModel) SupportsStreaming() bool {
 	return m.SupportsCapability(CapabilityStreaming)
 }
 
-// TokenUsage is token usage statistics.
-type TokenUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
 // Re-export root package types for convenience.
 type (
-	Role            = mas.Role
-	Message         = mas.Message
-	ToolCall        = mas.ToolCall
-	ToolSpec        = mas.ToolSpec
-	LLMResponse     = mas.LLMResponse
-	StreamEvent     = mas.StreamEvent
-	StreamEventType = mas.StreamEventType
-	ChatModel       = mas.ChatModel
+	Role         = mas.Role
+	Message      = mas.Message
+	ContentBlock = mas.ContentBlock
+	ContentType  = mas.ContentType
+	ToolCall     = mas.ToolCall
+	ToolSpec     = mas.ToolSpec
+	LLMResponse  = mas.LLMResponse
+	StreamEvent  = mas.StreamEvent
+	StopReason   = mas.StopReason
+	Usage        = mas.Usage
+	ChatModel    = mas.ChatModel
+	CallOption   = mas.CallOption
+	CallConfig   = mas.CallConfig
 )
 
 // Re-export role constants.
@@ -109,7 +107,23 @@ var (
 
 // Re-export stream event type constants.
 var (
-	StreamEventToken = mas.StreamEventToken
-	StreamEventDone  = mas.StreamEventDone
-	StreamEventError = mas.StreamEventError
+	StreamEventTextStart     = mas.StreamEventTextStart
+	StreamEventTextDelta     = mas.StreamEventTextDelta
+	StreamEventTextEnd       = mas.StreamEventTextEnd
+	StreamEventThinkingStart = mas.StreamEventThinkingStart
+	StreamEventThinkingDelta = mas.StreamEventThinkingDelta
+	StreamEventThinkingEnd   = mas.StreamEventThinkingEnd
+	StreamEventToolCallStart = mas.StreamEventToolCallStart
+	StreamEventToolCallDelta = mas.StreamEventToolCallDelta
+	StreamEventToolCallEnd   = mas.StreamEventToolCallEnd
+	StreamEventDone          = mas.StreamEventDone
+	StreamEventError         = mas.StreamEventError
+)
+
+// Re-export content type constants.
+var (
+	ContentText     = mas.ContentText
+	ContentThinking = mas.ContentThinking
+	ContentToolCall = mas.ContentToolCall
+	ContentImage    = mas.ContentImage
 )

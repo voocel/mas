@@ -15,6 +15,7 @@ type AgentState struct {
 	IsRunning        bool
 	StreamMessage    AgentMessage        // partial message being streamed, nil when idle
 	PendingToolCalls map[string]struct{} // tool call IDs currently executing
+	TotalUsage       Usage               // cumulative token usage across all turns
 	Error            string
 }
 
@@ -26,6 +27,8 @@ type Agent struct {
 	systemPrompt     string
 	tools            []Tool
 	maxTurns         int
+	maxRetries       int
+	maxToolErrors    int
 	thinkingLevel    ThinkingLevel
 	streamFn         StreamFn
 	transformContext func(ctx context.Context, msgs []AgentMessage) ([]AgentMessage, error)
@@ -39,6 +42,7 @@ type Agent struct {
 	lastError        string
 	streamMessage    AgentMessage        // partial message during streaming
 	pendingToolCalls map[string]struct{} // tool call IDs in flight
+	totalUsage       Usage               // cumulative token usage
 
 	// Queues
 	steeringQ []AgentMessage
@@ -55,6 +59,8 @@ type Agent struct {
 func NewAgent(opts ...AgentOption) *Agent {
 	a := &Agent{
 		maxTurns:         defaultMaxTurns,
+		maxRetries:       3,
+		maxToolErrors:    3,
 		steeringMode:     QueueModeAll,
 		followUpMode:     QueueModeAll,
 		pendingToolCalls: make(map[string]struct{}),
@@ -205,6 +211,7 @@ func (a *Agent) State() AgentState {
 		IsRunning:        a.isRunning,
 		StreamMessage:    a.streamMessage,
 		PendingToolCalls: pending,
+		TotalUsage:       a.totalUsage,
 		Error:            a.lastError,
 	}
 }
@@ -223,6 +230,13 @@ func (a *Agent) ClearMessages() {
 	a.messages = nil
 }
 
+// TotalUsage returns the cumulative token usage across all turns.
+func (a *Agent) TotalUsage() Usage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.totalUsage
+}
+
 // Reset clears all state and queues.
 func (a *Agent) Reset() {
 	a.mu.Lock()
@@ -234,6 +248,7 @@ func (a *Agent) Reset() {
 	a.lastError = ""
 	a.streamMessage = nil
 	a.pendingToolCalls = make(map[string]struct{})
+	a.totalUsage = Usage{}
 }
 
 // buildConfig constructs a LoopConfig from the agent's settings. Must be called with lock held.
@@ -242,6 +257,8 @@ func (a *Agent) buildConfig() LoopConfig {
 		Model:            a.model,
 		StreamFn:         a.streamFn,
 		MaxTurns:         a.maxTurns,
+		MaxRetries:       a.maxRetries,
+		MaxToolErrors:    a.maxToolErrors,
 		ThinkingLevel:    a.thinkingLevel,
 		TransformContext: a.transformContext,
 		ConvertToLLM:     a.convertToLLM,
@@ -305,6 +322,10 @@ func (a *Agent) consumeLoop(events <-chan Event) {
 			a.streamMessage = nil
 			if ev.Message != nil {
 				a.messages = append(a.messages, ev.Message)
+				// Accumulate usage from assistant messages
+				if msg, ok := ev.Message.(Message); ok && msg.Usage != nil {
+					a.totalUsage.Add(msg.Usage)
+				}
 			}
 
 		// Tool execution lifecycle

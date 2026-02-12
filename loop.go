@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
+
+	"github.com/voocel/litellm"
 )
 
 const defaultMaxTurns = 10
@@ -81,6 +84,7 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 
 	firstTurn := true
 	turnCount := 0
+	toolErrors := make(map[string]int) // consecutive failure count per tool
 
 	// Check for steering messages at start
 	var pendingMessages []AgentMessage
@@ -125,8 +129,8 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 				pendingMessages = nil
 			}
 
-			// Call LLM (streaming: events emitted inside callLLM)
-			assistantMsg, err := callLLM(ctx, currentCtx, config, ch)
+			// Call LLM with retry (streaming: events emitted inside callLLM)
+			assistantMsg, err := callLLMWithRetry(ctx, currentCtx, config, ch)
 			if err != nil {
 				emitError(ch, fmt.Errorf("llm call failed: %w", err))
 				return
@@ -149,7 +153,7 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 			var turnToolResults []ToolResult
 			if hasMoreToolCalls {
 				var steering []AgentMessage
-				turnToolResults, steering = executeToolCalls(ctx, currentCtx.Tools, toolCalls, config, ch)
+				turnToolResults, steering = executeToolCalls(ctx, currentCtx.Tools, toolCalls, config, toolErrors, ch)
 
 				for _, tr := range turnToolResults {
 					resultMsg := toolResultToMessage(tr)
@@ -187,6 +191,65 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 	}
 
 	emit(ch, Event{Type: EventAgentEnd, Data: *newMessages})
+}
+
+// callLLMWithRetry wraps callLLM with retry logic for retryable errors.
+func callLLMWithRetry(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch chan<- Event) (Message, error) {
+	maxRetries := config.MaxRetries
+	if maxRetries <= 0 {
+		return callLLM(ctx, agentCtx, config, ch)
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		msg, err := callLLM(ctx, agentCtx, config, ch)
+		if err == nil {
+			return msg, nil
+		}
+		lastErr = err
+
+		if !litellm.IsRetryableError(err) || attempt == maxRetries {
+			return Message{}, err
+		}
+
+		delay := retryDelay(err, attempt)
+
+		emit(ch, Event{
+			Type: EventRetry,
+			Err:  err,
+			Data: RetryInfo{
+				Attempt:    attempt + 1,
+				MaxRetries: maxRetries,
+				Delay:      delay,
+				Err:        err,
+			},
+		})
+
+		select {
+		case <-ctx.Done():
+			return Message{}, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return Message{}, lastErr
+}
+
+// retryDelay calculates the wait duration using exponential backoff,
+// capped at 30s. Respects Retry-After from rate limit errors.
+func retryDelay(err error, attempt int) time.Duration {
+	if after := litellm.GetRetryAfter(err); after > 0 {
+		d := time.Duration(after) * time.Second
+		if d > 30*time.Second {
+			d = 30 * time.Second
+		}
+		return d
+	}
+	// Exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
+	d := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
 }
 
 // callLLM applies the two-stage pipeline and calls the model.
@@ -310,12 +373,35 @@ func callLLMStream(ctx context.Context, model ChatModel, messages []Message, too
 }
 
 // executeToolCalls runs tool calls sequentially, checking steering after each.
-func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, config LoopConfig, ch chan<- Event) ([]ToolResult, []AgentMessage) {
+// toolErrors tracks consecutive failures per tool for circuit breaking.
+func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, config LoopConfig, toolErrors map[string]int, ch chan<- Event) ([]ToolResult, []AgentMessage) {
 	results := make([]ToolResult, 0, len(calls))
 
 	for i, call := range calls {
 		tool := findTool(tools, call.Name)
 		label := toolLabel(tool)
+
+		// Circuit breaker: skip if tool has exceeded consecutive failure threshold
+		if config.MaxToolErrors > 0 && toolErrors[call.Name] >= config.MaxToolErrors {
+			emit(ch, Event{
+				Type:      EventToolExecStart,
+				ToolID:    call.ID,
+				Tool:      call.Name,
+				ToolLabel: label,
+				Args:      call.Args,
+			})
+			errContent, _ := json.Marshal(fmt.Sprintf("tool %q disabled after %d consecutive errors", call.Name, config.MaxToolErrors))
+			result := ToolResult{ToolCallID: call.ID, Content: errContent, IsError: true}
+			emit(ch, Event{
+				Type:    EventToolExecEnd,
+				ToolID:  call.ID,
+				Tool:    call.Name,
+				Result:  result.Content,
+				IsError: true,
+			})
+			results = append(results, result)
+			continue
+		}
 
 		emit(ch, Event{
 			Type:      EventToolExecStart,
@@ -371,6 +457,13 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 			Result:    result.Content,
 			IsError:   result.IsError,
 		})
+
+		// Update consecutive error counter
+		if result.IsError {
+			toolErrors[call.Name]++
+		} else {
+			delete(toolErrors, call.Name)
+		}
 
 		results = append(results, result)
 

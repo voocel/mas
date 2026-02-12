@@ -4,11 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sort"
-	"strings"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/litellm/providers"
 	"github.com/voocel/mas"
 )
 
@@ -19,25 +16,23 @@ type LiteLLMAdapter struct {
 	model  string
 }
 
-// NewLiteLLMAdapter creates an adapter from a provider.
-func NewLiteLLMAdapter(model string, provider providers.Provider, options ...litellm.ClientOption) *LiteLLMAdapter {
-	client, _ := litellm.New(provider, options...)
-
+// NewLiteLLMAdapter creates an adapter from a litellm Client.
+func NewLiteLLMAdapter(model string, client *litellm.Client) *LiteLLMAdapter {
 	modelInfo := ModelInfo{
-		Name:        model,
-		Provider:    extractProvider(model),
-		Version:     "1.0",
-		MaxTokens:   getMaxTokens(model),
-		ContextSize: getContextSize(model),
+		Name:     model,
+		Provider: client.ProviderName(),
 		Capabilities: []string{
 			string(CapabilityChat),
 			string(CapabilityCompletion),
 			string(CapabilityStreaming),
+			string(CapabilityToolCalling),
 		},
 	}
 
-	if supportsToolCalling(model) {
-		modelInfo.Capabilities = append(modelInfo.Capabilities, string(CapabilityToolCalling))
+	// Enrich from registry if available
+	if caps, ok := litellm.GetModelCapabilities(model); ok {
+		modelInfo.MaxTokens = caps.MaxOutputTokens
+		modelInfo.ContextSize = caps.MaxInputTokens
 	}
 
 	return &LiteLLMAdapter{
@@ -49,29 +44,32 @@ func NewLiteLLMAdapter(model string, provider providers.Provider, options ...lit
 
 // NewOpenAIModel creates an OpenAI adapter.
 func NewOpenAIModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
-	cfg := providers.ProviderConfig{APIKey: apiKey}
+	cfg := litellm.ProviderConfig{APIKey: apiKey}
 	if len(baseURL) > 0 {
 		cfg.BaseURL = baseURL[0]
 	}
-	return NewLiteLLMAdapter(model, providers.NewOpenAI(cfg))
+	client, _ := litellm.NewWithProvider("openai", cfg)
+	return NewLiteLLMAdapter(model, client)
 }
 
 // NewAnthropicModel creates an Anthropic adapter.
 func NewAnthropicModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
-	cfg := providers.ProviderConfig{APIKey: apiKey}
+	cfg := litellm.ProviderConfig{APIKey: apiKey}
 	if len(baseURL) > 0 {
 		cfg.BaseURL = baseURL[0]
 	}
-	return NewLiteLLMAdapter(model, providers.NewAnthropic(cfg))
+	client, _ := litellm.NewWithProvider("anthropic", cfg)
+	return NewLiteLLMAdapter(model, client)
 }
 
 // NewGeminiModel creates a Gemini adapter.
 func NewGeminiModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
-	cfg := providers.ProviderConfig{APIKey: apiKey}
+	cfg := litellm.ProviderConfig{APIKey: apiKey}
 	if len(baseURL) > 0 {
 		cfg.BaseURL = baseURL[0]
 	}
-	return NewLiteLLMAdapter(model, providers.NewGemini(cfg))
+	client, _ := litellm.NewWithProvider("gemini", cfg)
+	return NewLiteLLMAdapter(model, client)
 }
 
 // Generate produces a synchronous response.
@@ -127,12 +125,12 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 		defer stream.Close()
 
 		var (
-			partial        = mas.Message{Role: mas.RoleAssistant}
-			textStarted    bool
-			thinkStarted   bool
-			finishReason   string
-			toolBuilders   = make(map[int]*toolCallBuilder)
-			toolStarted    = make(map[int]bool)
+			partial      = mas.Message{Role: mas.RoleAssistant}
+			textStarted  bool
+			thinkStarted bool
+			finishReason string
+			toolAcc      = litellm.NewToolCallAccumulator()
+			toolStarted  = make(map[int]bool)
 		)
 
 		for {
@@ -194,11 +192,11 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 
 			// Tool call deltas
 			if chunk.ToolCallDelta != nil {
-				applyToolCallDelta(toolBuilders, chunk.ToolCallDelta)
-
-				// Emit toolcall_start for new tool calls
 				deltaIdx := chunk.ToolCallDelta.Index
-				if !toolStarted[deltaIdx] && toolBuilders[deltaIdx] != nil {
+				wasStarted := toolAcc.Started(deltaIdx)
+				toolAcc.Apply(chunk.ToolCallDelta)
+
+				if !wasStarted && !toolStarted[deltaIdx] {
 					toolStarted[deltaIdx] = true
 					eventChan <- StreamEvent{
 						Type:    StreamEventToolCallStart,
@@ -206,7 +204,6 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 					}
 				}
 
-				// Emit toolcall_delta for argument increments
 				if chunk.ToolCallDelta.ArgumentsDelta != "" {
 					eventChan <- StreamEvent{
 						Type:    StreamEventToolCallDelta,
@@ -244,9 +241,13 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 		}
 
 		// Build final tool calls from accumulated deltas
-		if toolCalls := buildToolCalls(toolBuilders); len(toolCalls) > 0 {
-			for _, tc := range toolCalls {
-				partial.Content = append(partial.Content, mas.ToolCallBlock(tc))
+		if calls := toolAcc.Build(); len(calls) > 0 {
+			for _, tc := range calls {
+				partial.Content = append(partial.Content, mas.ToolCallBlock(ToolCall{
+					ID:   tc.ID,
+					Name: tc.Function.Name,
+					Args: []byte(tc.Function.Arguments),
+				}))
 				idx := len(partial.Content) - 1
 				eventChan <- StreamEvent{
 					Type:         StreamEventToolCallEnd,
@@ -351,20 +352,19 @@ func convertResponse(response *litellm.Response) Message {
 	}
 }
 
-// mapStopReason converts provider finish reasons to StopReason.
+// mapStopReason maps litellm canonical FinishReason to MAS StopReason.
 func mapStopReason(reason string) mas.StopReason {
 	switch reason {
-	case "stop", "end_turn":
+	case litellm.FinishReasonStop, "":
 		return mas.StopReasonStop
-	case "length", "max_tokens":
+	case litellm.FinishReasonLength:
 		return mas.StopReasonLength
-	case "tool_calls", "tool_use":
+	case litellm.FinishReasonToolCall:
 		return mas.StopReasonToolUse
+	case litellm.FinishReasonError:
+		return mas.StopReasonError
 	default:
-		if reason != "" {
-			return mas.StopReason(reason)
-		}
-		return mas.StopReasonStop
+		return mas.StopReason(reason)
 	}
 }
 
@@ -399,104 +399,3 @@ func applyToolConfig(request *litellm.Request, tools []ToolSpec) {
 	request.ToolChoice = "auto"
 }
 
-type toolCallBuilder struct {
-	id           string
-	callType     string
-	functionName string
-	arguments    strings.Builder
-}
-
-func applyToolCallDelta(builders map[int]*toolCallBuilder, delta *litellm.ToolCallDelta) {
-	if builders == nil || delta == nil {
-		return
-	}
-
-	builder, exists := builders[delta.Index]
-	if !exists {
-		builder = &toolCallBuilder{}
-		builders[delta.Index] = builder
-	}
-
-	if delta.ID != "" {
-		builder.id = delta.ID
-	}
-	if delta.Type != "" {
-		builder.callType = delta.Type
-	}
-	if delta.FunctionName != "" {
-		builder.functionName = delta.FunctionName
-	}
-	if delta.ArgumentsDelta != "" {
-		builder.arguments.WriteString(delta.ArgumentsDelta)
-	}
-}
-
-func buildToolCalls(builders map[int]*toolCallBuilder) []ToolCall {
-	if len(builders) == 0 {
-		return nil
-	}
-
-	indexes := make([]int, 0, len(builders))
-	for idx := range builders {
-		indexes = append(indexes, idx)
-	}
-	sort.Ints(indexes)
-
-	toolCalls := make([]ToolCall, 0, len(indexes))
-	for _, idx := range indexes {
-		builder := builders[idx]
-		if builder == nil {
-			continue
-		}
-		toolCalls = append(toolCalls, ToolCall{
-			ID:   builder.id,
-			Name: builder.functionName,
-			Args: []byte(builder.arguments.String()),
-		})
-	}
-	return toolCalls
-}
-
-func getMaxTokens(model string) int {
-	switch model {
-	case "gpt-4.1", "gpt-4.1-mini":
-		return 32000
-	case "gpt-5", "gpt-5-mini":
-		return 128000
-	case "claude-3.7-sonnet", "claude-4-sonnet":
-		return 128000
-	case "gemini-2.5-pro", "gemini-2.5-flash":
-		return 1048576
-	default:
-		return 4096
-	}
-}
-
-func getContextSize(model string) int { return getMaxTokens(model) }
-
-func extractProvider(model string) string {
-	switch {
-	case strings.HasPrefix(model, "gpt-"):
-		return "openai"
-	case strings.HasPrefix(model, "claude-"):
-		return "anthropic"
-	case strings.HasPrefix(model, "gemini-"):
-		return "google"
-	default:
-		return "unknown"
-	}
-}
-
-func supportsToolCalling(model string) bool {
-	supported := []string{
-		"gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini",
-		"claude-4-sonnet", "claude-3.7-sonnet", "claude-3.5-haiku",
-		"gemini-2.5-pro", "gemini-2.5-flash",
-	}
-	for _, s := range supported {
-		if model == s {
-			return true
-		}
-	}
-	return false
-}

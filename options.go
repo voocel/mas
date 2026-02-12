@@ -58,3 +58,15 @@ func WithFollowUpMode(mode QueueMode) AgentOption {
 func WithThinkingLevel(level ThinkingLevel) AgentOption {
 	return func(a *Agent) { a.thinkingLevel = level }
 }
+
+// WithMaxRetries sets the LLM call retry limit for retryable errors.
+func WithMaxRetries(n int) AgentOption {
+	return func(a *Agent) { a.maxRetries = n }
+}
+
+// WithMaxToolErrors sets the consecutive failure threshold per tool.
+// After reaching this limit, the tool is disabled for the rest of the loop.
+// 0 means unlimited (no circuit breaker).
+func WithMaxToolErrors(n int) AgentOption {
+	return func(a *Agent) { a.maxToolErrors = n }
+}

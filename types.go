@@ -117,6 +117,18 @@ type Usage struct {
 	TotalTokens int `json:"total_tokens"`
 }
 
+// Add accumulates another Usage into this one (nil-safe).
+func (u *Usage) Add(other *Usage) {
+	if other == nil {
+		return
+	}
+	u.Input += other.Input
+	u.Output += other.Output
+	u.CacheRead += other.CacheRead
+	u.CacheWrite += other.CacheWrite
+	u.TotalTokens += other.TotalTokens
+}
+
 // ---------------------------------------------------------------------------
 // Thinking Level
 // ---------------------------------------------------------------------------
@@ -334,6 +346,8 @@ type LoopConfig struct {
 	Model         ChatModel
 	StreamFn      StreamFn      // nil = use Model directly
 	MaxTurns      int           // safety limit, default 10
+	MaxRetries    int           // LLM call retry limit for retryable errors, default 3
+	MaxToolErrors int           // consecutive tool failure threshold per tool, 0 = unlimited
 	ThinkingLevel ThinkingLevel // reasoning depth
 
 	// Two-stage pipeline: TransformContext → ConvertToLLM
@@ -452,6 +466,7 @@ const (
 	EventToolExecStart  EventType = "tool_exec_start"
 	EventToolExecUpdate EventType = "tool_exec_update"
 	EventToolExecEnd    EventType = "tool_exec_end"
+	EventRetry          EventType = "retry"
 	EventError          EventType = "error"
 )
 
@@ -469,5 +484,13 @@ type Event struct {
 	IsError     bool         // tool error flag for tool_exec_end
 	ToolResults []ToolResult // for turn_end: all tool results from this turn
 	Err         error        // for error events
-	Data        any          // generic payload (e.g. []AgentMessage for agent_end)
+	Data        any          // generic payload (e.g. []AgentMessage for agent_end, RetryInfo for retry)
+}
+
+// RetryInfo carries retry context, stored in Event.Data for EventRetry.
+type RetryInfo struct {
+	Attempt    int
+	MaxRetries int
+	Delay      time.Duration
+	Err        error
 }

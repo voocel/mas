@@ -1,241 +1,248 @@
-# MAS
+# AgentCore
 
-**MAS** (Multi-Agent System) is a lightweight, elegant Go SDK for building powerful multi-agent systems with minimal complexity.
+**AgentCore** is a minimal, composable Go library for building AI agent applications.
 
-> *Build production-ready AI agents in Go — simple to start, powerful to scale.*
-
-### Positioning
-
-- **Lightweight Core, Powerful Kernel**: Minimal API surface with strong execution and policy control.
-- **Easy to Embed**: Designed to integrate into existing systems without heavy frameworks.
-- **Policy-Driven Governance**: Tool, file, and network access can be explicitly controlled.
-- **Extensible by Design**: Pluggable tools, transports, and runtimes.
-- **Clear Boundary**: Not an OS-level sandbox; focuses on controllable execution and policy governance.
-
-### Design Philosophy
-
-- **Agent as Descriptor**: Agents hold configuration (prompt, tools, metadata) — no execution logic, no state management
-- **Runner-Driven Execution**: The Runner controls the execution loop; agents remain passive
-- **Explicit over Implicit**: No hidden state — execution flow is fully observable
-- **Minimal API Surface**: 3 lines for core scenarios, advanced capabilities compose on demand
+Inspired by [pi-agent](https://github.com/mariozechner/pi-mono/tree/main/packages/agent) — pure function loop + stateful shell, event stream as the single output, steering/follow-up dual queues.
 
 [Examples](./examples/) | [Chinese](./README_CN.md)
 
 ## Install
 
 ```bash
-go get github.com/voocel/mas
+go get github.com/voocel/agentcore
 ```
 
+## Architecture
+
+```
+agentcore/            Agent core (types, loop, agent, events, subagent)
+agentcore/llm/        LLM adapters (OpenAI, Anthropic, Gemini via litellm)
+agentcore/tools/      Built-in tools: read, write, edit, bash
+agentcore/memory/     Context compaction — auto-summarize long conversations
+```
+
+Core design:
+
+- **Pure function loop** (`loop.go`) — double loop: inner processes tool calls + steering, outer handles follow-up
+- **Stateful Agent** (`agent.go`) — consumes loop events to update state, same as any external listener
+- **Event stream** — single `<-chan Event` output drives any UI (TUI, Web, Slack, logging)
+- **Two-stage pipeline** — `TransformContext` (prune/inject) → `ConvertToLLM` (filter to LLM messages)
+- **SubAgent tool** (`subagent.go`) — multi-agent via tool invocation, three modes: single, parallel, chain
+- **Context compaction** (`memory/`) — automatic summarization when context approaches window limit
+
 ## Quick Start
+
+### Single Agent
 
 ```go
 package main
 
 import (
-    "context"
     "fmt"
     "os"
 
-    "github.com/voocel/mas"
-    "github.com/voocel/mas/agent"
-    "github.com/voocel/mas/llm"
-    "github.com/voocel/mas/runner"
-    "github.com/voocel/mas/schema"
-    "github.com/voocel/mas/tools/builtin"
+    "github.com/voocel/agentcore"
+    "github.com/voocel/agentcore/llm"
+    "github.com/voocel/agentcore/tools"
 )
 
 func main() {
-    model := llm.NewOpenAIModel(
-        "gpt-5",
-        os.Getenv("OPENAI_API_KEY"),
-        os.Getenv("OPENAI_API_BASE_URL"),
-    )
+    model := llm.NewOpenAIModel("gpt-4.1-mini", os.Getenv("OPENAI_API_KEY"))
 
-    // Minimal entry (recommended)
-    resp, err := mas.Query(
-        context.Background(),
-        model,
-        "Compute 15 * 8 + 7",
-        mas.WithPreset("assistant"),
-        mas.WithTools(builtin.NewCalculator()),
-    )
-    if err != nil {
-        fmt.Println("error:", err)
-        return
-    }
-    fmt.Println(resp.Content)
-
-    // Advanced: custom Runner
-    ag := agent.New(
-        "assistant",
-        "assistant",
-        agent.WithSystemPrompt("You are a helpful assistant."),
-        agent.WithTools(builtin.NewCalculator()),
-    )
-
-    r := runner.New(runner.Config{Model: model})
-
-    resp, err := r.Run(context.Background(), ag, schema.Message{
-        Role:    schema.RoleUser,
-        Content: "Compute 15 * 8 + 7",
-    })
-    if err != nil {
-        fmt.Println("error:", err)
-        return
-    }
-
-    fmt.Println(resp.Content)
-}
-```
-
-## Session Client
-
-```go
-cli, _ := mas.NewClient(
-    model,
-    mas.WithPreset("assistant"),
-    mas.WithTools(builtin.NewCalculator()),
-)
-resp, _ := cli.Send(context.Background(), "Continue with 9 * 9")
-```
-
-## Structured Output (JSON Schema)
-
-```go
-format := &llm.ResponseFormat{
-    Type: "json_object",
-}
-resp, _ := mas.Query(
-    context.Background(),
-    model,
-    "Return JSON {\"answer\": 42}",
-    mas.WithResponseFormat(format),
-)
-```
-
-## Full Result (Usage/Tool Trace)
-
-```go
-result, _ := mas.QueryWithResult(
-    context.Background(),
-    model,
-    "Compute 6 * 7",
-)
-fmt.Println(result.Message.Content, result.Usage.TotalTokens)
-```
-
-## Multi‑Agent (Team)
-
-```go
-import "github.com/voocel/mas/multi"
-
-team := multi.NewTeam()
-team.Add("researcher", researcher)
-team.Add("writer", writer)
-
-ag, _ := team.Route("researcher")
-resp, _ := runner.Run(ctx, ag, msg)
-```
-
-By default, multi‑agent runs are memory‑isolated per agent. To share minimal context (final outputs only), pass a shared memory store:
-
-```go
-shared := memory.NewBuffer(0)
-resp, _ := multi.RunSequentialWithOptions(ctx, r, []*agent.Agent{researcher, writer}, msg,
-    multi.WithSharedMemory(shared),
-)
-```
-
-## Collaboration Modes (Light but Powerful)
-
-```go
-// Sequential collaboration
-resp, _ := multi.RunSequential(ctx, r, []*agent.Agent{researcher, writer}, msg)
-
-// Parallel collaboration + reduce
-resp, _ := multi.RunParallel(ctx, r, []*agent.Agent{a1, a2}, msg, multi.FirstReducer)
-
-// Dynamic routing (handoff)
-router := &multi.KeywordRouter{
-    Rules:   map[string]string{"stats": "analyst", "write": "writer"},
-    Default: "assistant",
-}
-resp, _ := multi.RunHandoff(ctx, r, team, router, msg, multi.WithMaxSteps(3))
-```
-
-Handoff uses `transfer_to_<agent>` tool calls only (no JSON/text handoff).
-
-## Middleware & Policies
-
-```go
-import "github.com/voocel/mas/middleware"
-
-r := runner.New(runner.Config{
-    Model: model,
-    Middlewares: []runner.Middleware{
-        &middleware.TimeoutMiddleware{LLMTimeout: 10 * time.Second, ToolTimeout: 20 * time.Second},
-        &middleware.RetryMiddleware{MaxAttempts: 3},
-        middleware.NewToolAllowlist("calculator", "web_search"),
-        middleware.NewToolCapabilityPolicy(
-            middleware.AllowOnly(tools.CapabilityNetwork),
-            middleware.Deny(tools.CapabilityFile),
+    agent := agentcore.NewAgent(
+        agentcore.WithModel(model),
+        agentcore.WithSystemPrompt("You are a helpful coding assistant."),
+        agentcore.WithTools(
+            tools.NewRead(),
+            tools.NewWrite(),
+            tools.NewEdit(),
+            tools.NewBash("."),
         ),
-    },
-})
-```
+    )
 
-## Observability & Tracing
+    agent.Subscribe(func(ev agentcore.Event) {
+        if ev.Type == agentcore.EventMessageEnd {
+            if msg, ok := ev.Message.(agentcore.Message); ok && msg.Role == agentcore.RoleAssistant {
+                fmt.Println(msg.Content)
+            }
+        }
+    })
 
-```go
-import "github.com/voocel/mas/observer"
-
-r := runner.New(runner.Config{
-    Model:    model,
-    Observer: observer.NewLoggerObserver(os.Stdout),
-    Tracer:   observer.NewSimpleTimerTracer(os.Stdout),
-})
-```
-Logs include `run_id`, `step_id`, and `span_id` for correlation.
-
-## Structured Logs & Metrics
-
-```go
-import (
-    "github.com/voocel/mas/middleware"
-    "github.com/voocel/mas/observer"
-)
-
-metrics := &middleware.MetricsObserver{}
-obs := observer.NewCompositeObserver(
-    observer.NewJSONObserver(os.Stdout),
-    metrics,
-)
-```
-
-## Routing (Optional)
-
-```go
-router := &multi.KeywordRouter{
-    Rules:   map[string]string{"stats": "analyst", "write": "writer"},
-    Default: "assistant",
+    agent.Prompt("List the files in the current directory.")
+    agent.WaitForIdle()
 }
-ag, _ := router.Select(msg, team)
 ```
 
-## Core Concepts
+### Multi-Agent (SubAgent Tool)
 
-- **Agent**: describes role, system prompt and tools
-- **Runner**: drives the execution loop (LLM → tools → feedback)
-- **Tool**: independent capability with optional side‑effect flags
-- **Memory**: conversation store (in‑memory window by default)
-  - System prompts are injected by Runner at build time and are not stored in Memory.
+Sub-agents are invoked as regular tools with isolated contexts:
 
-## Tool Execution Layer (Executor)
+```go
+scout := agentcore.SubAgentConfig{
+    Name:         "scout",
+    Description:  "Fast codebase reconnaissance",
+    Model:        llm.NewOpenAIModel("gpt-4.1-mini", apiKey),
+    SystemPrompt: "Quickly explore and report findings. Be concise.",
+    Tools:        []agentcore.Tool{tools.NewRead(), tools.NewBash(".")},
+    MaxTurns:     5,
+}
 
-- `executor` provides ToolExecutor abstraction and Policy for tool execution/runtime integration.
-- `mas-sandboxd` is a control-plane harness (protocol + execution framework only; no OS-level isolation).
-- For detailed sandbox flow, setup, and examples: [executor/sandbox/README.md](executor/sandbox/README.md).
+worker := agentcore.SubAgentConfig{
+    Name:         "worker",
+    Description:  "General-purpose executor",
+    Model:        llm.NewOpenAIModel("gpt-4.1-mini", apiKey),
+    SystemPrompt: "Implement tasks given to you.",
+    Tools:        []agentcore.Tool{tools.NewRead(), tools.NewWrite(), tools.NewEdit(), tools.NewBash(".")},
+}
+
+agent := agentcore.NewAgent(
+    agentcore.WithModel(model),
+    agentcore.WithTools(agentcore.NewSubAgentTool(scout, worker)),
+)
+```
+
+Three execution modes via tool call:
+
+```jsonc
+// Single: one agent, one task
+{"agent": "scout", "task": "Find all API endpoints"}
+
+// Parallel: concurrent execution
+{"tasks": [{"agent": "scout", "task": "Find auth code"}, {"agent": "scout", "task": "Find DB schema"}]}
+
+// Chain: sequential with {previous} context passing
+{"chain": [{"agent": "scout", "task": "Find auth code"}, {"agent": "worker", "task": "Refactor based on: {previous}"}]}
+```
+
+### Steering & Follow-Up
+
+```go
+// Interrupt mid-run (delivered after current tool, remaining tools skipped)
+agent.Steer(agentcore.Message{Role: agentcore.RoleUser, Content: "Stop and focus on tests instead."})
+
+// Queue for after the agent finishes
+agent.FollowUp(agentcore.Message{Role: agentcore.RoleUser, Content: "Now run the tests."})
+
+// Cancel immediately
+agent.Abort()
+```
+
+### Event Stream
+
+All lifecycle events flow through a single channel — subscribe to drive any UI:
+
+```go
+agent.Subscribe(func(ev agentcore.Event) {
+    switch ev.Type {
+    case agentcore.EventMessageStart:    // assistant starts streaming
+    case agentcore.EventMessageUpdate:   // streaming token delta
+    case agentcore.EventMessageEnd:      // message complete
+    case agentcore.EventToolExecStart:   // tool execution begins
+    case agentcore.EventToolExecEnd:     // tool execution ends
+    case agentcore.EventError:           // error occurred
+    }
+})
+```
+
+### Custom LLM (StreamFn)
+
+Swap the LLM call with a proxy, mock, or custom implementation:
+
+```go
+agent := agentcore.NewAgent(
+    agentcore.WithStreamFn(func(ctx context.Context, req *agentcore.LLMRequest) (*agentcore.LLMResponse, error) {
+        // Route to your own proxy/gateway
+        return callMyProxy(ctx, req)
+    }),
+)
+```
+
+### Context Compaction
+
+Auto-summarize conversation history when approaching the context window limit. Hooks in via `TransformContext` — zero changes to core:
+
+```go
+import "github.com/voocel/agentcore/memory"
+
+agent := agentcore.NewAgent(
+    agentcore.WithModel(model),
+    agentcore.WithTransformContext(memory.NewCompaction(memory.CompactionConfig{
+        Model:         model,
+        ContextWindow: 128000,
+    })),
+    agentcore.WithConvertToLLM(memory.CompactionConvertToLLM),
+)
+```
+
+On each LLM call, compaction checks total tokens. When they exceed `ContextWindow - ReserveTokens` (default 16384), it:
+
+1. Keeps recent messages (default 20000 tokens)
+2. Summarizes older messages via LLM into a structured checkpoint (Goal / Progress / Key Decisions / Next Steps)
+3. Tracks file operations (read/write/edit paths) across compacted messages
+4. Supports incremental updates — subsequent compactions update the existing summary rather than re-summarizing
+
+### Context Pipeline
+
+```go
+agent := agentcore.NewAgent(
+    // Stage 1: prune old messages, inject external context
+    agentcore.WithTransformContext(func(ctx context.Context, msgs []agentcore.AgentMessage) ([]agentcore.AgentMessage, error) {
+        if len(msgs) > 100 {
+            msgs = msgs[len(msgs)-50:]
+        }
+        return msgs, nil
+    }),
+    // Stage 2: filter to LLM-compatible messages
+    agentcore.WithConvertToLLM(func(msgs []agentcore.AgentMessage) []agentcore.Message {
+        var out []agentcore.Message
+        for _, m := range msgs {
+            if msg, ok := m.(agentcore.Message); ok {
+                out = append(out, msg)
+            }
+        }
+        return out
+    }),
+)
+```
+
+## Built-in Tools
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents with head truncation (2000 lines / 50KB) |
+| `write` | Write file with auto-mkdir |
+| `edit` | Exact text replacement with fuzzy match, BOM/line-ending normalization, unified diff output |
+| `bash` | Execute shell commands with tail truncation (2000 lines / 50KB) |
+
+## API Reference
+
+### Agent
+
+| Method | Description |
+|--------|-------------|
+| `NewAgent(opts...)` | Create agent with options |
+| `Prompt(input)` | Start new conversation turn |
+| `Continue()` | Resume from current context |
+| `Steer(msg)` | Inject steering message mid-run |
+| `FollowUp(msg)` | Queue message for after completion |
+| `Abort()` | Cancel current execution |
+| `WaitForIdle()` | Block until agent finishes |
+| `Subscribe(fn)` | Register event listener |
+| `State()` | Snapshot of current state |
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `WithModel(m)` | Set LLM model |
+| `WithSystemPrompt(s)` | Set system prompt |
+| `WithTools(t...)` | Set tool list |
+| `WithMaxTurns(n)` | Safety limit (default: 10) |
+| `WithStreamFn(fn)` | Custom LLM call function |
+| `WithTransformContext(fn)` | Context transform (stage 1) |
+| `WithConvertToLLM(fn)` | Message conversion (stage 2) |
+| `WithSteeringMode(m)` | Queue drain mode: `"all"` or `"one-at-a-time"` |
+| `WithFollowUpMode(m)` | Queue drain mode: `"all"` or `"one-at-a-time"` |
 
 ## License
 

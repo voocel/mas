@@ -5,9 +5,9 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/voocel/mas"
-	"github.com/voocel/mas/llm"
-	"github.com/voocel/mas/tools"
+	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/llm"
+	"github.com/voocel/agentcore/tools"
 )
 
 func main() {
@@ -24,23 +24,23 @@ func main() {
 
 	model := llm.NewOpenAIModel(modelName, apiKey)
 
-	agent := mas.NewAgent(
-		mas.WithModel(model),
-		mas.WithSystemPrompt("You are a helpful coding assistant. Use the provided tools to help users with software engineering tasks."),
-		mas.WithTools(
+	agent := agentcore.NewAgent(
+		agentcore.WithModel(model),
+		agentcore.WithSystemPrompt("You are a helpful coding assistant. Use the provided tools to help users with software engineering tasks."),
+		agentcore.WithTools(
 			tools.NewRead(),
 			tools.NewWrite(),
 			tools.NewEdit(),
 			tools.NewBash("."),
 		),
-		mas.WithMaxTurns(20),
+		agentcore.WithMaxTurns(20),
 	)
 
 	m := newModel(agent, modelName)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Bridge: agent events -> bubbletea Elm loop
-	agent.Subscribe(func(ev mas.Event) {
+	agent.Subscribe(func(ev agentcore.Event) {
 		p.Send(agentEventMsg{event: ev})
 	})
 

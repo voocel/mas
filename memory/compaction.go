@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/voocel/mas"
+	"github.com/voocel/agentcore"
 )
 
 const (
@@ -20,7 +20,7 @@ const (
 type CompactionConfig struct {
 	// Model is the ChatModel used for generating summaries.
 	// Typically the same model the agent uses.
-	Model mas.ChatModel
+	Model agentcore.ChatModel
 
 	// ContextWindow is the model's context window size in tokens.
 	// Required — there is no default.
@@ -40,14 +40,14 @@ type CompactionConfig struct {
 //
 // Usage:
 //
-//	agent := mas.NewAgent(
-//	    mas.WithTransformContext(memory.NewCompaction(memory.CompactionConfig{
+//	agent := agentcore.NewAgent(
+//	    agentcore.WithTransformContext(memory.NewCompaction(memory.CompactionConfig{
 //	        Model:         model,
 //	        ContextWindow: 128000,
 //	    })),
-//	    mas.WithConvertToLLM(memory.CompactionConvertToLLM),
+//	    agentcore.WithConvertToLLM(memory.CompactionConvertToLLM),
 //	)
-func NewCompaction(cfg CompactionConfig) func(context.Context, []mas.AgentMessage) ([]mas.AgentMessage, error) {
+func NewCompaction(cfg CompactionConfig) func(context.Context, []agentcore.AgentMessage) ([]agentcore.AgentMessage, error) {
 	if cfg.ReserveTokens <= 0 {
 		cfg.ReserveTokens = defaultReserveTokens
 	}
@@ -55,7 +55,7 @@ func NewCompaction(cfg CompactionConfig) func(context.Context, []mas.AgentMessag
 		cfg.KeepRecentTokens = defaultKeepRecentTokens
 	}
 
-	return func(ctx context.Context, msgs []mas.AgentMessage) ([]mas.AgentMessage, error) {
+	return func(ctx context.Context, msgs []agentcore.AgentMessage) ([]agentcore.AgentMessage, error) {
 		if len(msgs) == 0 || cfg.Model == nil {
 			return msgs, nil
 		}
@@ -119,7 +119,7 @@ func NewCompaction(cfg CompactionConfig) func(context.Context, []mas.AgentMessag
 			Timestamp:     time.Now(),
 		}
 
-		result := make([]mas.AgentMessage, 0, 1+len(toKeep))
+		result := make([]agentcore.AgentMessage, 0, 1+len(toKeep))
 		result = append(result, cs)
 		result = append(result, toKeep...)
 		return result, nil
@@ -146,7 +146,7 @@ type cutResult struct {
 //   - Never cut between an assistant message (with tool calls) and its tool results
 //   - Prefer cutting at user message boundaries
 //   - Detect split turns and report the turn start index
-func findCutPoint(msgs []mas.AgentMessage, keepTokens int) cutResult {
+func findCutPoint(msgs []agentcore.AgentMessage, keepTokens int) cutResult {
 	if len(msgs) == 0 {
 		return cutResult{}
 	}
@@ -172,21 +172,21 @@ func findCutPoint(msgs []mas.AgentMessage, keepTokens int) cutResult {
 	// Never split tool pair (assistant with toolCalls + following tool results)
 	for cutIndex < len(msgs) {
 		msg := msgs[cutIndex]
-		if m, ok := msg.(mas.Message); ok {
+		if m, ok := msg.(agentcore.Message); ok {
 			// Don't cut at a tool result — it belongs to the previous assistant
-			if m.Role == mas.RoleTool {
+			if m.Role == agentcore.RoleTool {
 				cutIndex++
 				continue
 			}
 			// Good cut point: user message
-			if m.Role == mas.RoleUser {
+			if m.Role == agentcore.RoleUser {
 				break
 			}
 			// Assistant message with tool calls: skip past all its tool results
-			if m.Role == mas.RoleAssistant && m.HasToolCalls() {
+			if m.Role == agentcore.RoleAssistant && m.HasToolCalls() {
 				cutIndex++
 				for cutIndex < len(msgs) {
-					if next, ok := msgs[cutIndex].(mas.Message); ok && next.Role == mas.RoleTool {
+					if next, ok := msgs[cutIndex].(agentcore.Message); ok && next.Role == agentcore.RoleTool {
 						cutIndex++
 					} else {
 						break
@@ -209,10 +209,10 @@ func findCutPoint(msgs []mas.AgentMessage, keepTokens int) cutResult {
 	// Detect split turn: if cut is not at a user message, find the turn start
 	isSplitTurn := false
 	turnStartIndex := -1
-	if m, ok := msgs[cutIndex].(mas.Message); !ok || m.Role != mas.RoleUser {
+	if m, ok := msgs[cutIndex].(agentcore.Message); !ok || m.Role != agentcore.RoleUser {
 		// Walk backwards from cutIndex to find the user message that started this turn
 		for i := cutIndex - 1; i >= 0; i-- {
-			if um, ok := msgs[i].(mas.Message); ok && um.Role == mas.RoleUser {
+			if um, ok := msgs[i].(agentcore.Message); ok && um.Role == agentcore.RoleUser {
 				turnStartIndex = i
 				isSplitTurn = true
 				break
@@ -228,13 +228,13 @@ func findCutPoint(msgs []mas.AgentMessage, keepTokens int) cutResult {
 }
 
 // extractFileOps scans messages for tool calls and extracts file paths.
-func extractFileOps(msgs []mas.AgentMessage) (readFiles, modifiedFiles []string) {
+func extractFileOps(msgs []agentcore.AgentMessage) (readFiles, modifiedFiles []string) {
 	readSet := make(map[string]struct{})
 	modifiedSet := make(map[string]struct{})
 
 	for _, m := range msgs {
-		msg, ok := m.(mas.Message)
-		if !ok || msg.Role != mas.RoleAssistant {
+		msg, ok := m.(agentcore.Message)
+		if !ok || msg.Role != agentcore.RoleAssistant {
 			continue
 		}
 		for _, tc := range msg.ToolCalls() {

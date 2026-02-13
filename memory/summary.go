@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/voocel/mas"
+	"github.com/voocel/agentcore"
 )
 
 const summarySystemPrompt = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
@@ -99,7 +99,7 @@ Summarize the prefix to provide context for the retained suffix:
 Be concise. Focus on what's needed to understand the kept suffix.`
 
 // generateTurnPrefixSummary generates a summary for the prefix portion of a split turn.
-func generateTurnPrefixSummary(ctx context.Context, model mas.ChatModel, msgs []mas.AgentMessage) (string, error) {
+func generateTurnPrefixSummary(ctx context.Context, model agentcore.ChatModel, msgs []agentcore.AgentMessage) (string, error) {
 	conversation := serializeConversation(msgs)
 	if conversation == "" {
 		return "", nil
@@ -107,9 +107,9 @@ func generateTurnPrefixSummary(ctx context.Context, model mas.ChatModel, msgs []
 
 	userPrompt := "<conversation>\n" + conversation + "\n</conversation>\n\n" + turnPrefixPrompt
 
-	resp, err := model.Generate(ctx, []mas.Message{
-		mas.SystemMsg(summarySystemPrompt),
-		mas.UserMsg(userPrompt),
+	resp, err := model.Generate(ctx, []agentcore.Message{
+		agentcore.SystemMsg(summarySystemPrompt),
+		agentcore.UserMsg(userPrompt),
 	}, nil)
 	if err != nil {
 		return "", fmt.Errorf("turn prefix summarization failed: %w", err)
@@ -119,7 +119,7 @@ func generateTurnPrefixSummary(ctx context.Context, model mas.ChatModel, msgs []
 
 // generateSummary calls the ChatModel to produce a conversation summary.
 // If previousSummary is non-empty, uses incremental update prompt.
-func generateSummary(ctx context.Context, model mas.ChatModel, msgs []mas.AgentMessage, previousSummary string) (string, error) {
+func generateSummary(ctx context.Context, model agentcore.ChatModel, msgs []agentcore.AgentMessage, previousSummary string) (string, error) {
 	conversation := serializeConversation(msgs)
 	if conversation == "" {
 		return "", fmt.Errorf("no conversation content to summarize")
@@ -135,9 +135,9 @@ func generateSummary(ctx context.Context, model mas.ChatModel, msgs []mas.AgentM
 			summaryPrompt
 	}
 
-	resp, err := model.Generate(ctx, []mas.Message{
-		mas.SystemMsg(summarySystemPrompt),
-		mas.UserMsg(userPrompt),
+	resp, err := model.Generate(ctx, []agentcore.Message{
+		agentcore.SystemMsg(summarySystemPrompt),
+		agentcore.UserMsg(userPrompt),
 	}, nil)
 	if err != nil {
 		return "", fmt.Errorf("summarization failed: %w", err)
@@ -174,18 +174,18 @@ func formatArgsKeyValue(raw json.RawMessage) string {
 }
 
 // serializeConversation converts messages to readable text for LLM input.
-func serializeConversation(msgs []mas.AgentMessage) string {
+func serializeConversation(msgs []agentcore.AgentMessage) string {
 	var parts []string
 
 	for _, m := range msgs {
 		switch v := m.(type) {
-		case mas.Message:
+		case agentcore.Message:
 			switch v.Role {
-			case mas.RoleUser:
+			case agentcore.RoleUser:
 				if text := v.TextContent(); text != "" {
 					parts = append(parts, "[User]: "+text)
 				}
-			case mas.RoleAssistant:
+			case agentcore.RoleAssistant:
 				if text := v.TextContent(); text != "" {
 					parts = append(parts, "[Assistant]: "+text)
 				}
@@ -196,7 +196,7 @@ func serializeConversation(msgs []mas.AgentMessage) string {
 					}
 					parts = append(parts, "[Assistant tool calls]: "+strings.Join(calls, "; "))
 				}
-			case mas.RoleTool:
+			case agentcore.RoleTool:
 				content := v.TextContent()
 				if len(content) > 500 {
 					content = content[:497] + "..."

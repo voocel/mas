@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/voocel/litellm"
-	"github.com/voocel/mas"
+	"github.com/voocel/agentcore"
 )
 
 // LiteLLMAdapter adapts litellm to the llm.ChatModel interface.
@@ -125,7 +125,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 		defer stream.Close()
 
 		var (
-			partial      = mas.Message{Role: mas.RoleAssistant}
+			partial      = agentcore.Message{Role: agentcore.RoleAssistant}
 			textStarted  bool
 			thinkStarted bool
 			finishReason string
@@ -150,7 +150,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 			if chunk.Reasoning != nil && chunk.Reasoning.Content != "" {
 				if !thinkStarted {
 					thinkStarted = true
-					partial.Content = append(partial.Content, mas.ThinkingBlock(""))
+					partial.Content = append(partial.Content, agentcore.ThinkingBlock(""))
 					idx := len(partial.Content) - 1
 					eventChan <- StreamEvent{
 						Type:         StreamEventThinkingStart,
@@ -158,7 +158,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 						Message:      partial,
 					}
 				}
-				idx := lastBlockIndex(partial.Content, mas.ContentThinking)
+				idx := lastBlockIndex(partial.Content, agentcore.ContentThinking)
 				partial.Content[idx].Thinking += chunk.Reasoning.Content
 				eventChan <- StreamEvent{
 					Type:         StreamEventThinkingDelta,
@@ -172,7 +172,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 			if chunk.Content != "" {
 				if !textStarted {
 					textStarted = true
-					partial.Content = append(partial.Content, mas.TextBlock(""))
+					partial.Content = append(partial.Content, agentcore.TextBlock(""))
 					idx := len(partial.Content) - 1
 					eventChan <- StreamEvent{
 						Type:         StreamEventTextStart,
@@ -180,7 +180,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 						Message:      partial,
 					}
 				}
-				idx := lastBlockIndex(partial.Content, mas.ContentText)
+				idx := lastBlockIndex(partial.Content, agentcore.ContentText)
 				partial.Content[idx].Text += chunk.Content
 				eventChan <- StreamEvent{
 					Type:         StreamEventTextDelta,
@@ -220,7 +220,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 
 		// Emit end events for open blocks
 		if thinkStarted {
-			idx := lastBlockIndex(partial.Content, mas.ContentThinking)
+			idx := lastBlockIndex(partial.Content, agentcore.ContentThinking)
 			if idx >= 0 {
 				eventChan <- StreamEvent{
 					Type:         StreamEventThinkingEnd,
@@ -230,7 +230,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 			}
 		}
 		if textStarted {
-			idx := lastBlockIndex(partial.Content, mas.ContentText)
+			idx := lastBlockIndex(partial.Content, agentcore.ContentText)
 			if idx >= 0 {
 				eventChan <- StreamEvent{
 					Type:         StreamEventTextEnd,
@@ -243,7 +243,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 		// Build final tool calls from accumulated deltas
 		if calls := toolAcc.Build(); len(calls) > 0 {
 			for _, tc := range calls {
-				partial.Content = append(partial.Content, mas.ToolCallBlock(ToolCall{
+				partial.Content = append(partial.Content, agentcore.ToolCallBlock(ToolCall{
 					ID:   tc.ID,
 					Name: tc.Function.Name,
 					Args: []byte(tc.Function.Arguments),
@@ -265,7 +265,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 }
 
 // lastBlockIndex returns the index of the last ContentBlock of the given type.
-func lastBlockIndex(blocks []mas.ContentBlock, ct mas.ContentType) int {
+func lastBlockIndex(blocks []agentcore.ContentBlock, ct agentcore.ContentType) int {
 	for i := len(blocks) - 1; i >= 0; i-- {
 		if blocks[i].Type == ct {
 			return i
@@ -274,7 +274,7 @@ func lastBlockIndex(blocks []mas.ContentBlock, ct mas.ContentType) int {
 	return -1
 }
 
-// convertMessages converts mas.Message to litellm.Message.
+// convertMessages converts agentcore.Message to litellm.Message.
 func convertMessages(messages []Message) []litellm.Message {
 	llmMessages := make([]litellm.Message, len(messages))
 	for i, msg := range messages {
@@ -283,7 +283,7 @@ func convertMessages(messages []Message) []litellm.Message {
 			Content: msg.TextContent(),
 		}
 
-		if msg.Role == mas.RoleTool {
+		if msg.Role == agentcore.RoleTool {
 			if id, ok := msg.Metadata["tool_call_id"].(string); ok {
 				llmMsg.ToolCallID = id
 			}
@@ -309,23 +309,23 @@ func convertMessages(messages []Message) []litellm.Message {
 	return llmMessages
 }
 
-// convertResponse converts litellm.Response to mas.Message with content blocks.
+// convertResponse converts litellm.Response to agentcore.Message with content blocks.
 func convertResponse(response *litellm.Response) Message {
-	var content []mas.ContentBlock
+	var content []agentcore.ContentBlock
 
 	// Thinking/reasoning content
 	if response.Reasoning != nil && response.Reasoning.Content != "" {
-		content = append(content, mas.ThinkingBlock(response.Reasoning.Content))
+		content = append(content, agentcore.ThinkingBlock(response.Reasoning.Content))
 	}
 
 	// Text content
 	if response.Content != "" {
-		content = append(content, mas.TextBlock(response.Content))
+		content = append(content, agentcore.TextBlock(response.Content))
 	}
 
 	// Tool calls
 	for _, call := range response.ToolCalls {
-		content = append(content, mas.ToolCallBlock(mas.ToolCall{
+		content = append(content, agentcore.ToolCallBlock(agentcore.ToolCall{
 			ID:   call.ID,
 			Name: call.Function.Name,
 			Args: []byte(call.Function.Arguments),
@@ -333,9 +333,9 @@ func convertResponse(response *litellm.Response) Message {
 	}
 
 	// Map usage
-	var usage *mas.Usage
+	var usage *agentcore.Usage
 	if response.Usage.TotalTokens > 0 {
-		usage = &mas.Usage{
+		usage = &agentcore.Usage{
 			Input:       response.Usage.PromptTokens,
 			Output:      response.Usage.CompletionTokens,
 			CacheRead:   response.Usage.CacheReadInputTokens,
@@ -345,7 +345,7 @@ func convertResponse(response *litellm.Response) Message {
 	}
 
 	return Message{
-		Role:       mas.RoleAssistant,
+		Role:       agentcore.RoleAssistant,
 		Content:    content,
 		StopReason: mapStopReason(response.FinishReason),
 		Usage:      usage,
@@ -353,25 +353,25 @@ func convertResponse(response *litellm.Response) Message {
 }
 
 // mapStopReason maps litellm canonical FinishReason to MAS StopReason.
-func mapStopReason(reason string) mas.StopReason {
+func mapStopReason(reason string) agentcore.StopReason {
 	switch reason {
 	case litellm.FinishReasonStop, "":
-		return mas.StopReasonStop
+		return agentcore.StopReasonStop
 	case litellm.FinishReasonLength:
-		return mas.StopReasonLength
+		return agentcore.StopReasonLength
 	case litellm.FinishReasonToolCall:
-		return mas.StopReasonToolUse
+		return agentcore.StopReasonToolUse
 	case litellm.FinishReasonError:
-		return mas.StopReasonError
+		return agentcore.StopReasonError
 	default:
-		return mas.StopReason(reason)
+		return agentcore.StopReason(reason)
 	}
 }
 
 // applyThinkingConfig resolves CallOptions and sets ThinkingConfig on the request.
 func applyThinkingConfig(req *litellm.Request, opts []CallOption) {
-	callCfg := mas.ResolveCallConfig(opts)
-	if callCfg.ThinkingLevel == "" || callCfg.ThinkingLevel == mas.ThinkingOff {
+	callCfg := agentcore.ResolveCallConfig(opts)
+	if callCfg.ThinkingLevel == "" || callCfg.ThinkingLevel == agentcore.ThinkingOff {
 		return
 	}
 	req.Thinking = litellm.NewThinkingWithLevel(string(callCfg.ThinkingLevel))

@@ -1,4 +1,4 @@
-module github.com/voocel/mas/examples/tui
+module github.com/voocel/agentcore/examples/tui
 
 go 1.25
 
@@ -7,7 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/glamour v0.9.1
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/voocel/mas v0.0.0
+	github.com/voocel/agentcore v0.0.0
 )
 
 require (
@@ -45,4 +45,4 @@ require (
 	golang.org/x/text v0.23.0 // indirect
 )
 
-replace github.com/voocel/mas => ../..
+replace github.com/voocel/agentcore => ../..

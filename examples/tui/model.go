@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/voocel/mas"
+	"github.com/voocel/agentcore"
 )
 
 // blockKind identifies the type of a rendered content block.
@@ -33,7 +33,7 @@ type block struct {
 // model is the bubbletea Model for the TUI.
 type model struct {
 	// Agent
-	agent     *mas.Agent
+	agent     *agentcore.Agent
 	modelName string
 
 	// Bubbles components
@@ -60,7 +60,7 @@ type model struct {
 	glamour *glamour.TermRenderer
 }
 
-func newModel(agent *mas.Agent, modelName string) model {
+func newModel(agent *agentcore.Agent, modelName string) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colorAssistant)
@@ -158,7 +158,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		if m.running {
 			// Steer: inject message while agent is running
-			m.agent.Steer(mas.UserMsg(text))
+			m.agent.Steer(agentcore.UserMsg(text))
 		} else {
 			// New prompt
 			m.blocks = append(m.blocks, block{
@@ -221,25 +221,25 @@ func (m model) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 // --- Agent event handling ---
 
-func (m model) handleAgentEvent(ev mas.Event) (tea.Model, tea.Cmd) {
+func (m model) handleAgentEvent(ev agentcore.Event) (tea.Model, tea.Cmd) {
 	switch ev.Type {
 
-	case mas.EventAgentStart:
+	case agentcore.EventAgentStart:
 		m.running = true
 
-	case mas.EventAgentEnd:
+	case agentcore.EventAgentEnd:
 		m.running = false
 
-	case mas.EventTurnStart:
+	case agentcore.EventTurnStart:
 		m.turnCount++
 
-	case mas.EventMessageStart:
-		if role := msgRole(ev.Message); role == mas.RoleAssistant {
+	case agentcore.EventMessageStart:
+		if role := msgRole(ev.Message); role == agentcore.RoleAssistant {
 			m.isStream = true
 			m.streaming.Reset()
-		} else if role == mas.RoleUser {
+		} else if role == agentcore.RoleUser {
 			// Steer message echoed back
-			if msg, ok := ev.Message.(mas.Message); ok && !msg.IsEmpty() {
+			if msg, ok := ev.Message.(agentcore.Message); ok && !msg.IsEmpty() {
 				m.blocks = append(m.blocks, block{
 					kind:    blockUser,
 					content: userPrefixStyle.Render("> You") + "\n" + msg.TextContent(),
@@ -247,14 +247,14 @@ func (m model) handleAgentEvent(ev mas.Event) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case mas.EventMessageUpdate:
+	case agentcore.EventMessageUpdate:
 		if m.isStream {
 			m.streaming.WriteString(ev.Delta)
 			m.rebuildViewport()
 		}
 
-	case mas.EventMessageEnd:
-		if role := msgRole(ev.Message); role == mas.RoleAssistant {
+	case agentcore.EventMessageEnd:
+		if role := msgRole(ev.Message); role == agentcore.RoleAssistant {
 			m.isStream = false
 			content := m.streaming.String()
 			m.streaming.Reset()
@@ -267,7 +267,7 @@ func (m model) handleAgentEvent(ev mas.Event) (tea.Model, tea.Cmd) {
 			m.rebuildViewport()
 		}
 
-	case mas.EventToolExecStart:
+	case agentcore.EventToolExecStart:
 		name := ev.Tool
 		m.pendingTools[ev.ToolID] = name
 
@@ -278,7 +278,7 @@ func (m model) handleAgentEvent(ev mas.Event) (tea.Model, tea.Cmd) {
 		})
 		m.rebuildViewport()
 
-	case mas.EventToolExecEnd:
+	case agentcore.EventToolExecEnd:
 		delete(m.pendingTools, ev.ToolID)
 
 		resultStr := formatToolResult(ev.Result, ev.IsError)
@@ -288,7 +288,7 @@ func (m model) handleAgentEvent(ev mas.Event) (tea.Model, tea.Cmd) {
 		})
 		m.rebuildViewport()
 
-	case mas.EventError:
+	case agentcore.EventError:
 		errMsg := "unknown error"
 		if ev.Err != nil {
 			errMsg = ev.Err.Error()
@@ -371,7 +371,7 @@ func (m *model) renderMarkdown(content string) string {
 
 // --- Utility functions ---
 
-func msgRole(msg mas.AgentMessage) mas.Role {
+func msgRole(msg agentcore.AgentMessage) agentcore.Role {
 	if msg == nil {
 		return ""
 	}

@@ -1,4 +1,4 @@
-package mas
+package agentcore
 
 // emit sends an event to the channel (non-blocking if channel is full, drops event).
 func emit(ch chan<- Event, ev Event) {

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/voocel/mas"
-	"github.com/voocel/mas/llm"
-	"github.com/voocel/mas/tools"
+	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/llm"
+	"github.com/voocel/agentcore/tools"
 )
 
 func main() {
@@ -18,32 +18,32 @@ func main() {
 
 	model := llm.NewOpenAIModel("gpt-4.1-mini", apiKey)
 
-	agent := mas.NewAgent(
-		mas.WithModel(model),
-		mas.WithSystemPrompt("You are a helpful coding assistant. Use the provided tools to help users."),
-		mas.WithTools(
+	agent := agentcore.NewAgent(
+		agentcore.WithModel(model),
+		agentcore.WithSystemPrompt("You are a helpful coding assistant. Use the provided tools to help users."),
+		agentcore.WithTools(
 			tools.NewRead(),
 			tools.NewWrite(),
 			tools.NewEdit(),
 			tools.NewBash("."),
 		),
-		mas.WithMaxTurns(20),
+		agentcore.WithMaxTurns(20),
 	)
 
 	// Subscribe to events for output
-	agent.Subscribe(func(ev mas.Event) {
+	agent.Subscribe(func(ev agentcore.Event) {
 		switch ev.Type {
-		case mas.EventMessageEnd:
-			if msg, ok := ev.Message.(mas.Message); ok && msg.Role == mas.RoleAssistant {
+		case agentcore.EventMessageEnd:
+			if msg, ok := ev.Message.(agentcore.Message); ok && msg.Role == agentcore.RoleAssistant {
 				fmt.Printf("\nAssistant: %s\n", msg.TextContent())
 			}
-		case mas.EventToolExecStart:
+		case agentcore.EventToolExecStart:
 			fmt.Printf("  [tool] %s(%v)\n", ev.Tool, string(ev.Args.([]byte)))
-		case mas.EventToolExecEnd:
+		case agentcore.EventToolExecEnd:
 			if ev.IsError {
 				fmt.Printf("  [tool] %s error\n", ev.Tool)
 			}
-		case mas.EventError:
+		case agentcore.EventError:
 			fmt.Fprintf(os.Stderr, "Error: %v\n", ev.Err)
 		}
 	})

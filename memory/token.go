@@ -1,21 +1,21 @@
 package memory
 
-import "github.com/voocel/mas"
+import "github.com/voocel/agentcore"
 
 // EstimateTokens estimates the token count for a single message.
 // Uses chars/4 approximation (conservative overestimate).
-func EstimateTokens(msg mas.AgentMessage) int {
+func EstimateTokens(msg agentcore.AgentMessage) int {
 	var chars int
 
 	switch v := msg.(type) {
-	case mas.Message:
+	case agentcore.Message:
 		for _, b := range v.Content {
 			switch b.Type {
-			case mas.ContentText:
+			case agentcore.ContentText:
 				chars += len(b.Text)
-			case mas.ContentThinking:
+			case agentcore.ContentThinking:
 				chars += len(b.Thinking)
-			case mas.ContentToolCall:
+			case agentcore.ContentToolCall:
 				if b.ToolCall != nil {
 					chars += len(b.ToolCall.Name) + len(b.ToolCall.Args)
 				}
@@ -31,7 +31,7 @@ func EstimateTokens(msg mas.AgentMessage) int {
 }
 
 // EstimateTotal estimates the total token count for a message list.
-func EstimateTotal(msgs []mas.AgentMessage) int {
+func EstimateTotal(msgs []agentcore.AgentMessage) int {
 	total := 0
 	for _, m := range msgs {
 		total += EstimateTokens(m)

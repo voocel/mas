@@ -3,7 +3,7 @@ package memory
 import (
 	"time"
 
-	"github.com/voocel/mas"
+	"github.com/voocel/agentcore"
 )
 
 // CompactionSummary is a compacted context summary message.
@@ -17,20 +17,20 @@ type CompactionSummary struct {
 	Timestamp     time.Time
 }
 
-func (c CompactionSummary) GetRole() mas.Role        { return mas.RoleUser }
+func (c CompactionSummary) GetRole() agentcore.Role        { return agentcore.RoleUser }
 func (c CompactionSummary) GetTimestamp() time.Time   { return c.Timestamp }
 
 // CompactionConvertToLLM converts AgentMessages to LLM Messages,
 // handling CompactionSummary by wrapping it as a user message with XML tags.
 // For all other message types, it delegates to DefaultConvertToLLM behavior.
-func CompactionConvertToLLM(msgs []mas.AgentMessage) []mas.Message {
-	out := make([]mas.Message, 0, len(msgs))
+func CompactionConvertToLLM(msgs []agentcore.AgentMessage) []agentcore.Message {
+	out := make([]agentcore.Message, 0, len(msgs))
 	for _, m := range msgs {
 		switch v := m.(type) {
 		case CompactionSummary:
-			out = append(out, mas.Message{
-				Role:    mas.RoleUser,
-				Content: []mas.ContentBlock{mas.TextBlock("<context-summary>\n" + v.Summary + "\n</context-summary>")},
+			out = append(out, agentcore.Message{
+				Role:    agentcore.RoleUser,
+				Content: []agentcore.ContentBlock{agentcore.TextBlock("<context-summary>\n" + v.Summary + "\n</context-summary>")},
 				Metadata: map[string]any{
 					"type":           "compaction_summary",
 					"tokens_before":  v.TokensBefore,
@@ -39,7 +39,7 @@ func CompactionConvertToLLM(msgs []mas.AgentMessage) []mas.Message {
 				},
 				Timestamp: v.Timestamp,
 			})
-		case mas.Message:
+		case agentcore.Message:
 			out = append(out, v)
 		}
 	}

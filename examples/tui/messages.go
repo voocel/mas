@@ -1,9 +1,9 @@
 package main
 
-import "github.com/voocel/mas"
+import "github.com/voocel/agentcore"
 
-// agentEventMsg bridges mas agent events into the bubbletea Elm loop.
+// agentEventMsg bridges agentcore agent events into the bubbletea Elm loop.
 // Subscribe callback sends these via p.Send(agentEventMsg{ev}).
 type agentEventMsg struct {
-	event mas.Event
+	event agentcore.Event
 }

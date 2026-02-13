@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/voocel/mas"
-	"github.com/voocel/mas/llm"
-	"github.com/voocel/mas/tools"
+	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/llm"
+	"github.com/voocel/agentcore/tools"
 )
 
 func main() {
@@ -20,24 +20,24 @@ func main() {
 	scoutModel := llm.NewOpenAIModel("gpt-4.1-mini", apiKey)
 
 	// Define sub-agent configurations (like pi's .md agent files)
-	scout := mas.SubAgentConfig{
+	scout := agentcore.SubAgentConfig{
 		Name:         "scout",
 		Description:  "Fast codebase reconnaissance",
 		Model:        scoutModel,
 		SystemPrompt: "You are a scout agent. Quickly explore the codebase and report what you find. Be concise.",
-		Tools: []mas.Tool{
+		Tools: []agentcore.Tool{
 			tools.NewRead(),
 			tools.NewBash("."),
 		},
 		MaxTurns: 5,
 	}
 
-	reviewer := mas.SubAgentConfig{
+	reviewer := agentcore.SubAgentConfig{
 		Name:         "reviewer",
 		Description:  "Code review specialist",
 		Model:        mainModel,
 		SystemPrompt: "You are a code reviewer. Review the code and provide constructive feedback on quality, style, and correctness.",
-		Tools: []mas.Tool{
+		Tools: []agentcore.Tool{
 			tools.NewRead(),
 			tools.NewBash("."),
 		},
@@ -45,33 +45,33 @@ func main() {
 	}
 
 	// Main agent has the subagent tool — it delegates to scout/reviewer
-	agent := mas.NewAgent(
-		mas.WithModel(mainModel),
-		mas.WithSystemPrompt(
+	agent := agentcore.NewAgent(
+		agentcore.WithModel(mainModel),
+		agentcore.WithSystemPrompt(
 			"You are a coding assistant. Use the subagent tool to delegate tasks:\n"+
 				"- Use 'scout' for codebase exploration\n"+
 				"- Use 'reviewer' for code review\n"+
 				"You can use chain mode to scout first, then review based on findings.",
 		),
-		mas.WithTools(
+		agentcore.WithTools(
 			tools.NewRead(),
 			tools.NewWrite(),
 			tools.NewEdit(),
 			tools.NewBash("."),
-			mas.NewSubAgentTool(scout, reviewer),
+			agentcore.NewSubAgentTool(scout, reviewer),
 		),
-		mas.WithMaxTurns(20),
+		agentcore.WithMaxTurns(20),
 	)
 
-	agent.Subscribe(func(ev mas.Event) {
+	agent.Subscribe(func(ev agentcore.Event) {
 		switch ev.Type {
-		case mas.EventMessageEnd:
-			if msg, ok := ev.Message.(mas.Message); ok && msg.Role == mas.RoleAssistant {
+		case agentcore.EventMessageEnd:
+			if msg, ok := ev.Message.(agentcore.Message); ok && msg.Role == agentcore.RoleAssistant {
 				fmt.Printf("\nAssistant: %s\n", msg.TextContent())
 			}
-		case mas.EventToolExecStart:
+		case agentcore.EventToolExecStart:
 			fmt.Printf("  [tool] %s\n", ev.Tool)
-		case mas.EventError:
+		case agentcore.EventError:
 			fmt.Fprintf(os.Stderr, "Error: %v\n", ev.Err)
 		}
 	})

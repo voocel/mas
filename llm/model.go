@@ -1,6 +1,6 @@
 package llm
 
-import "github.com/voocel/mas"
+import "github.com/voocel/agentcore"
 
 // ModelInfo contains basic model metadata.
 type ModelInfo struct {
@@ -82,48 +82,48 @@ func (m *BaseModel) SupportsStreaming() bool {
 
 // Re-export root package types for convenience.
 type (
-	Role         = mas.Role
-	Message      = mas.Message
-	ContentBlock = mas.ContentBlock
-	ContentType  = mas.ContentType
-	ToolCall     = mas.ToolCall
-	ToolSpec     = mas.ToolSpec
-	LLMResponse  = mas.LLMResponse
-	StreamEvent  = mas.StreamEvent
-	StopReason   = mas.StopReason
-	Usage        = mas.Usage
-	ChatModel    = mas.ChatModel
-	CallOption   = mas.CallOption
-	CallConfig   = mas.CallConfig
+	Role         = agentcore.Role
+	Message      = agentcore.Message
+	ContentBlock = agentcore.ContentBlock
+	ContentType  = agentcore.ContentType
+	ToolCall     = agentcore.ToolCall
+	ToolSpec     = agentcore.ToolSpec
+	LLMResponse  = agentcore.LLMResponse
+	StreamEvent  = agentcore.StreamEvent
+	StopReason   = agentcore.StopReason
+	Usage        = agentcore.Usage
+	ChatModel    = agentcore.ChatModel
+	CallOption   = agentcore.CallOption
+	CallConfig   = agentcore.CallConfig
 )
 
 // Re-export role constants.
 var (
-	RoleUser      = mas.RoleUser
-	RoleAssistant = mas.RoleAssistant
-	RoleSystem    = mas.RoleSystem
-	RoleTool      = mas.RoleTool
+	RoleUser      = agentcore.RoleUser
+	RoleAssistant = agentcore.RoleAssistant
+	RoleSystem    = agentcore.RoleSystem
+	RoleTool      = agentcore.RoleTool
 )
 
 // Re-export stream event type constants.
 var (
-	StreamEventTextStart     = mas.StreamEventTextStart
-	StreamEventTextDelta     = mas.StreamEventTextDelta
-	StreamEventTextEnd       = mas.StreamEventTextEnd
-	StreamEventThinkingStart = mas.StreamEventThinkingStart
-	StreamEventThinkingDelta = mas.StreamEventThinkingDelta
-	StreamEventThinkingEnd   = mas.StreamEventThinkingEnd
-	StreamEventToolCallStart = mas.StreamEventToolCallStart
-	StreamEventToolCallDelta = mas.StreamEventToolCallDelta
-	StreamEventToolCallEnd   = mas.StreamEventToolCallEnd
-	StreamEventDone          = mas.StreamEventDone
-	StreamEventError         = mas.StreamEventError
+	StreamEventTextStart     = agentcore.StreamEventTextStart
+	StreamEventTextDelta     = agentcore.StreamEventTextDelta
+	StreamEventTextEnd       = agentcore.StreamEventTextEnd
+	StreamEventThinkingStart = agentcore.StreamEventThinkingStart
+	StreamEventThinkingDelta = agentcore.StreamEventThinkingDelta
+	StreamEventThinkingEnd   = agentcore.StreamEventThinkingEnd
+	StreamEventToolCallStart = agentcore.StreamEventToolCallStart
+	StreamEventToolCallDelta = agentcore.StreamEventToolCallDelta
+	StreamEventToolCallEnd   = agentcore.StreamEventToolCallEnd
+	StreamEventDone          = agentcore.StreamEventDone
+	StreamEventError         = agentcore.StreamEventError
 )
 
 // Re-export content type constants.
 var (
-	ContentText     = mas.ContentText
-	ContentThinking = mas.ContentThinking
-	ContentToolCall = mas.ContentToolCall
-	ContentImage    = mas.ContentImage
+	ContentText     = agentcore.ContentText
+	ContentThinking = agentcore.ContentThinking
+	ContentToolCall = agentcore.ContentToolCall
+	ContentImage    = agentcore.ContentImage
 )

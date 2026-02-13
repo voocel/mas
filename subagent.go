@@ -1,4 +1,4 @@
-package mas
+package agentcore
 
 import (
 	"context"

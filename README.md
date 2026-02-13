@@ -2,9 +2,7 @@
 
 **AgentCore** is a minimal, composable Go library for building AI agent applications.
 
-Inspired by [pi-agent](https://github.com/mariozechner/pi-mono/tree/main/packages/agent) — pure function loop + stateful shell, event stream as the single output, steering/follow-up dual queues.
-
-[Examples](./examples/) | [Chinese](./README_CN.md)
+[Examples](./examples/) | [简体中文](./README_CN.md)
 
 ## Install
 

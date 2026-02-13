@@ -2,8 +2,6 @@
 
 **AgentCore** 是一个极简、可组合的 Go Agent 核心库，用于构建任意 AI Agent 应用。
 
-设计灵感来自 [pi-agent](https://github.com/mariozechner/pi-mono/tree/main/packages/agent) —— 纯函数循环 + 有状态壳，事件流作为唯一输出，steering/follow-up 双队列。
-
 [示例](./examples/) | [English](./README.md)
 
 ## 安装

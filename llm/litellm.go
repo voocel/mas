@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/voocel/litellm"
 	"github.com/voocel/agentcore"
+	"github.com/voocel/litellm"
 )
 
 // LiteLLMAdapter adapts litellm to the llm.ChatModel interface.
@@ -398,4 +398,3 @@ func applyToolConfig(request *litellm.Request, tools []ToolSpec) {
 	request.Tools = ltTools
 	request.ToolChoice = "auto"
 }
-

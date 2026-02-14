@@ -272,6 +272,9 @@ func callLLM(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch 
 	}
 	llmMessages := convertFn(messages)
 
+	// Repair orphaned tool call / result pairs
+	llmMessages = RepairMessageSequence(llmMessages)
+
 	// Build tool specs
 	toolSpecs := buildToolSpecs(agentCtx.Tools)
 

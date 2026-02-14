@@ -237,6 +237,34 @@ func (a *Agent) TotalUsage() Usage {
 	return a.totalUsage
 }
 
+// SetModel changes the LLM provider. Takes effect on the next turn.
+func (a *Agent) SetModel(m ChatModel) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.model = m
+}
+
+// SetSystemPrompt changes the system prompt. Takes effect on the next turn.
+func (a *Agent) SetSystemPrompt(s string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.systemPrompt = s
+}
+
+// SetTools replaces the tool set. Takes effect on the next turn.
+func (a *Agent) SetTools(tools ...Tool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tools = tools
+}
+
+// SetThinkingLevel changes the reasoning depth. Takes effect on the next turn.
+func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.thinkingLevel = level
+}
+
 // Reset clears all state and queues.
 func (a *Agent) Reset() {
 	a.mu.Lock()

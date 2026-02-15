@@ -17,8 +17,11 @@ type CompactionSummary struct {
 	Timestamp     time.Time
 }
 
-func (c CompactionSummary) GetRole() agentcore.Role        { return agentcore.RoleUser }
-func (c CompactionSummary) GetTimestamp() time.Time   { return c.Timestamp }
+func (c CompactionSummary) GetRole() agentcore.Role      { return agentcore.RoleUser }
+func (c CompactionSummary) GetTimestamp() time.Time     { return c.Timestamp }
+func (c CompactionSummary) TextContent() string         { return c.Summary }
+func (c CompactionSummary) ThinkingContent() string     { return "" }
+func (c CompactionSummary) HasToolCalls() bool          { return false }
 
 // CompactionConvertToLLM converts AgentMessages to LLM Messages,
 // handling CompactionSummary by wrapping it as a user message with XML tags.

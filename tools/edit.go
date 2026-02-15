@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/voocel/agentcore/schema"
 )
 
 // EditTool performs exact string replacement in a file.
@@ -20,24 +22,11 @@ func (t *EditTool) Description() string {
 	return "Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits."
 }
 func (t *EditTool) Schema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path": map[string]any{
-				"type":        "string",
-				"description": "Path to the file to edit (relative or absolute)",
-			},
-			"old_text": map[string]any{
-				"type":        "string",
-				"description": "Exact text to find and replace (must be unique in the file)",
-			},
-			"new_text": map[string]any{
-				"type":        "string",
-				"description": "New text to replace the old text with",
-			},
-		},
-		"required": []string{"path", "old_text", "new_text"},
-	}
+	return schema.Object(
+		schema.Property("path", schema.String("Path to the file to edit (relative or absolute)")).Required(),
+		schema.Property("old_text", schema.String("Exact text to find and replace (must be unique in the file)")).Required(),
+		schema.Property("new_text", schema.String("New text to replace the old text with")).Required(),
+	)
 }
 
 type editArgs struct {

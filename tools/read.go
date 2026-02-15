@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/voocel/agentcore/schema"
 )
 
 // ReadTool reads file contents with optional offset and limit.
@@ -23,24 +25,11 @@ func (t *ReadTool) Description() string {
 	)
 }
 func (t *ReadTool) Schema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path": map[string]any{
-				"type":        "string",
-				"description": "Path to the file to read (relative or absolute)",
-			},
-			"offset": map[string]any{
-				"type":        "integer",
-				"description": "Line number to start reading from (1-based, default: 1)",
-			},
-			"limit": map[string]any{
-				"type":        "integer",
-				"description": "Maximum number of lines to read",
-			},
-		},
-		"required": []string{"path"},
-	}
+	return schema.Object(
+		schema.Property("path", schema.String("Path to the file to read (relative or absolute)")).Required(),
+		schema.Property("offset", schema.Int("Line number to start reading from (1-based, default: 1)")),
+		schema.Property("limit", schema.Int("Maximum number of lines to read")),
+	)
 }
 
 type readArgs struct {

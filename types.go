@@ -108,7 +108,14 @@ const (
 // Usage
 // ---------------------------------------------------------------------------
 
-// Usage tracks token consumption for an LLM call.
+// Usage tracks token consumption for a single LLM call.
+//
+// Field semantics:
+//   - Input: prompt tokens sent to the model (includes cached tokens for some providers)
+//   - Output: completion tokens generated (includes reasoning tokens if applicable)
+//   - CacheRead: tokens served from prompt cache (Anthropic: cache_read_input_tokens)
+//   - CacheWrite: tokens written to prompt cache (Anthropic: cache_creation_input_tokens)
+//   - TotalTokens: provider-reported total, typically Input + Output
 type Usage struct {
 	Input       int `json:"input"`
 	Output      int `json:"output"`
@@ -154,6 +161,9 @@ const (
 type AgentMessage interface {
 	GetRole() Role
 	GetTimestamp() time.Time
+	TextContent() string
+	ThinkingContent() string
+	HasToolCalls() bool
 }
 
 // Message is an LLM-level message with structured content blocks.
@@ -215,6 +225,32 @@ func (m Message) HasToolCalls() bool {
 // IsEmpty reports whether the message has no meaningful content.
 func (m Message) IsEmpty() bool {
 	return len(m.Content) == 0
+}
+
+// ---------------------------------------------------------------------------
+// Message Serialization Helpers
+// ---------------------------------------------------------------------------
+
+// CollectMessages extracts concrete Messages from an AgentMessage slice,
+// dropping custom types. Use this to serialize conversation history.
+func CollectMessages(msgs []AgentMessage) []Message {
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		if msg, ok := m.(Message); ok {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+// ToAgentMessages converts a Message slice to AgentMessage slice.
+// Use this to restore conversation history from deserialized Messages.
+func ToAgentMessages(msgs []Message) []AgentMessage {
+	out := make([]AgentMessage, len(msgs))
+	for i, m := range msgs {
+		out[i] = m
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +325,12 @@ type ToolLabeler interface {
 	Label() string
 }
 
+// PermissionFunc is called before each tool execution.
+// Return nil to allow execution, or a non-nil error to deny.
+// The error message is sent back to the LLM as a tool error result.
+// Receives context.Context to support I/O (e.g. TUI confirmation, remote policy).
+type PermissionFunc func(ctx context.Context, call ToolCall) error
+
 // FuncTool wraps a function as a Tool (convenience helper).
 type FuncTool struct {
 	name        string
@@ -354,11 +396,33 @@ type LoopConfig struct {
 	TransformContext func(ctx context.Context, msgs []AgentMessage) ([]AgentMessage, error)
 	ConvertToLLM     func(msgs []AgentMessage) []Message
 
+	// CheckPermission is called before each tool execution.
+	// Return nil to allow, or error to deny (error becomes tool error result).
+	// When nil, all tools are allowed.
+	CheckPermission PermissionFunc
+
 	// Steering: called after each tool execution to check for user interruptions.
 	GetSteeringMessages func() []AgentMessage
 
 	// FollowUp: called when the agent would otherwise stop.
 	GetFollowUpMessages func() []AgentMessage
+}
+
+// ---------------------------------------------------------------------------
+// Context Usage Estimation
+// ---------------------------------------------------------------------------
+
+// ContextEstimateFn estimates the current context token consumption from messages.
+// Returns total tokens, tokens from LLM Usage, and estimated trailing tokens.
+type ContextEstimateFn func(msgs []AgentMessage) (tokens, usageTokens, trailingTokens int)
+
+// ContextUsage represents the current context window occupancy estimate.
+type ContextUsage struct {
+	Tokens         int     `json:"tokens"`          // estimated total tokens in context
+	ContextWindow  int     `json:"context_window"`  // model's context window size
+	Percent        float64 `json:"percent"`         // tokens / contextWindow * 100
+	UsageTokens    int     `json:"usage_tokens"`    // from last LLM-reported Usage
+	TrailingTokens int     `json:"trailing_tokens"` // chars/4 estimate for trailing messages
 }
 
 // ---------------------------------------------------------------------------
@@ -474,20 +538,21 @@ const (
 // This is the single output channel for all lifecycle information.
 type Event struct {
 	Type        EventType
-	Message     AgentMessage // for message_start/update/end, turn_end
-	Delta       string       // text delta for message_update
-	ToolID      string       // for tool_exec_*
-	Tool        string       // tool name for tool_exec_*
-	ToolLabel   string       // human-readable tool label (from ToolLabeler)
-	Args        any          // tool args for tool_exec_start
-	Result      any          // tool result for tool_exec_end/update
-	IsError     bool         // tool error flag for tool_exec_end
-	ToolResults []ToolResult // for turn_end: all tool results from this turn
-	Err         error        // for error events
-	Data        any          // generic payload (e.g. []AgentMessage for agent_end, RetryInfo for retry)
+	Message     AgentMessage    // for message_start/update/end, turn_end
+	Delta       string          // text delta for message_update
+	ToolID      string          // for tool_exec_*
+	Tool        string          // tool name for tool_exec_*
+	ToolLabel   string          // human-readable tool label (from ToolLabeler)
+	Args        json.RawMessage // tool args for tool_exec_start
+	Result      json.RawMessage // tool result for tool_exec_end/update
+	IsError     bool            // tool error flag for tool_exec_end
+	ToolResults []ToolResult    // for turn_end: all tool results from this turn
+	Err         error           // for error events
+	NewMessages []AgentMessage  // for agent_end: messages added during this loop
+	RetryInfo   *RetryInfo      // for retry events
 }
 
-// RetryInfo carries retry context, stored in Event.Data for EventRetry.
+// RetryInfo carries retry context for EventRetry events.
 type RetryInfo struct {
 	Attempt    int
 	MaxRetries int

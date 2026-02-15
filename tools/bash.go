@@ -1,16 +1,21 @@
 package tools
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
+
+	"github.com/voocel/agentcore"
+	"github.com/voocel/agentcore/schema"
 )
 
 // BashTool executes shell commands.
-// Applies tail truncation (2000 lines / 50KB)
+// Streams stdout+stderr via ReportToolProgress for real-time display.
+// Final result applies tail truncation (2000 lines / 50KB).
 type BashTool struct {
 	WorkDir string
 	Timeout time.Duration // default: 2 minutes
@@ -29,20 +34,10 @@ func (t *BashTool) Description() string {
 	)
 }
 func (t *BashTool) Schema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"command": map[string]any{
-				"type":        "string",
-				"description": "Shell command to execute",
-			},
-			"timeout": map[string]any{
-				"type":        "integer",
-				"description": "Timeout in seconds (default: 120)",
-			},
-		},
-		"required": []string{"command"},
-	}
+	return schema.Object(
+		schema.Property("command", schema.String("Shell command to execute")).Required(),
+		schema.Property("timeout", schema.Int("Timeout in seconds (default: 120)")),
+	)
 }
 
 type bashArgs struct {
@@ -69,23 +64,38 @@ func (t *BashTool) Execute(ctx context.Context, args json.RawMessage) (json.RawM
 		cmd.Dir = t.WorkDir
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Merge stdout and stderr into a single pipe for streaming
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
 
-	err := cmd.Run()
-
-	// Combine stdout + stderr
-	output := stdout.String()
-	if errOut := stderr.String(); errOut != "" {
-		if output != "" {
-			output += "\n"
-		}
-		output += errOut
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start command: %w", err)
 	}
 
-	if output == "" {
-		output = "(no output)"
+	// Stream output line by line via tool progress
+	var output []byte
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(pr)
+		scanner.Buffer(make([]byte, 256*1024), 256*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			output = append(output, line...)
+			output = append(output, '\n')
+			// Report each line as progress for real-time display
+			agentcore.ReportToolProgress(ctx, line)
+		}
+	}()
+
+	err := cmd.Wait()
+	pw.Close()
+	<-done
+
+	outStr := string(output)
+	if outStr == "" {
+		outStr = "(no output)"
 	}
 
 	exitCode := 0
@@ -98,14 +108,11 @@ func (t *BashTool) Execute(ctx context.Context, args json.RawMessage) (json.RawM
 	}
 
 	// Apply tail truncation
-	truncated, totalLines, outputLines, wasTruncated := truncateTail(output, defaultMaxLines, defaultMaxBytes)
-
+	truncated, totalLines, outputLines, wasTruncated := truncateTail(outStr, defaultMaxLines, defaultMaxBytes)
 	if wasTruncated {
 		startLine := totalLines - outputLines + 1
-		truncated += fmt.Sprintf("\n\n[Showing lines %d-%d of %d.]",
-			startLine, totalLines, totalLines)
+		truncated += fmt.Sprintf("\n\n[Showing lines %d-%d of %d.]", startLine, totalLines, totalLines)
 	}
-
 	if exitCode != 0 {
 		truncated += fmt.Sprintf("\n\nCommand exited with code %d", exitCode)
 	}

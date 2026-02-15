@@ -33,8 +33,11 @@ type Agent struct {
 	streamFn         StreamFn
 	transformContext func(ctx context.Context, msgs []AgentMessage) ([]AgentMessage, error)
 	convertToLLM     func([]AgentMessage) []Message
-	steeringMode     QueueMode
-	followUpMode     QueueMode
+	steeringMode      QueueMode
+	followUpMode      QueueMode
+	contextWindow     int
+	contextEstimateFn ContextEstimateFn
+	permissionFn      PermissionFunc
 
 	// State
 	messages         []AgentMessage
@@ -223,11 +226,57 @@ func (a *Agent) Messages() []AgentMessage {
 	return copyMessages(a.messages)
 }
 
+// SetMessages replaces the message history (e.g. to restore a previous conversation).
+// The agent must not be running.
+func (a *Agent) SetMessages(msgs []AgentMessage) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.isRunning {
+		return fmt.Errorf("cannot set messages while agent is running")
+	}
+	a.messages = copyMessages(msgs)
+	return nil
+}
+
+// ExportMessages returns concrete Messages for serialization.
+func (a *Agent) ExportMessages() []Message {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return CollectMessages(a.messages)
+}
+
+// ImportMessages replaces message history from deserialized Messages.
+func (a *Agent) ImportMessages(msgs []Message) error {
+	return a.SetMessages(ToAgentMessages(msgs))
+}
+
 // ClearMessages resets the message history.
 func (a *Agent) ClearMessages() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.messages = nil
+}
+
+// ContextUsage returns an estimate of the current context window occupancy.
+// Returns nil if contextWindow or contextEstimateFn is not configured.
+func (a *Agent) ContextUsage() *ContextUsage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.contextWindow <= 0 || a.contextEstimateFn == nil {
+		return nil
+	}
+
+	tokens, usageTokens, trailingTokens := a.contextEstimateFn(a.messages)
+	pct := float64(tokens) / float64(a.contextWindow) * 100
+
+	return &ContextUsage{
+		Tokens:         tokens,
+		ContextWindow:  a.contextWindow,
+		Percent:        pct,
+		UsageTokens:    usageTokens,
+		TrailingTokens: trailingTokens,
+	}
 }
 
 // TotalUsage returns the cumulative token usage across all turns.
@@ -290,6 +339,7 @@ func (a *Agent) buildConfig() LoopConfig {
 		ThinkingLevel:    a.thinkingLevel,
 		TransformContext: a.transformContext,
 		ConvertToLLM:     a.convertToLLM,
+		CheckPermission:  a.permissionFn,
 		GetSteeringMessages: func() []AgentMessage {
 			a.mu.Lock()
 			defer a.mu.Unlock()

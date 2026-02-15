@@ -102,13 +102,13 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 			// Check for context cancellation (Abort)
 			if ctx.Err() != nil {
 				emit(ch, Event{Type: EventError, Err: ctx.Err()})
-				emit(ch, Event{Type: EventAgentEnd, Data: *newMessages})
+				emit(ch, Event{Type: EventAgentEnd, NewMessages: *newMessages})
 				return
 			}
 
 			if turnCount >= maxTurns {
 				emit(ch, Event{Type: EventError, Err: fmt.Errorf("max turns (%d) reached", maxTurns)})
-				emit(ch, Event{Type: EventAgentEnd, Data: *newMessages})
+				emit(ch, Event{Type: EventAgentEnd, NewMessages: *newMessages})
 				return
 			}
 
@@ -142,7 +142,7 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 			// Check stop reason — terminate early on error/aborted
 			if assistantMsg.StopReason == StopReasonError || assistantMsg.StopReason == StopReasonAborted {
 				emit(ch, Event{Type: EventTurnEnd, Message: assistantMsg})
-				emit(ch, Event{Type: EventAgentEnd, Data: *newMessages})
+				emit(ch, Event{Type: EventAgentEnd, NewMessages: *newMessages})
 				return
 			}
 
@@ -190,7 +190,7 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 		break
 	}
 
-	emit(ch, Event{Type: EventAgentEnd, Data: *newMessages})
+	emit(ch, Event{Type: EventAgentEnd, NewMessages: *newMessages})
 }
 
 // callLLMWithRetry wraps callLLM with retry logic for retryable errors.
@@ -217,7 +217,7 @@ func callLLMWithRetry(ctx context.Context, agentCtx *AgentContext, config LoopCo
 		emit(ch, Event{
 			Type: EventRetry,
 			Err:  err,
-			Data: RetryInfo{
+			RetryInfo: &RetryInfo{
 				Attempt:    attempt + 1,
 				MaxRetries: maxRetries,
 				Delay:      delay,
@@ -413,6 +413,25 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 			ToolLabel: label,
 			Args:      call.Args,
 		})
+
+		// Permission check: deny before execution if callback returns error.
+		// Denial does NOT count toward toolErrors (policy decision, not tool failure).
+		if config.CheckPermission != nil {
+			if err := config.CheckPermission(ctx, call); err != nil {
+				errContent, _ := json.Marshal(err.Error())
+				result := ToolResult{ToolCallID: call.ID, Content: errContent, IsError: true}
+				emit(ch, Event{
+					Type:      EventToolExecEnd,
+					ToolID:    call.ID,
+					Tool:      call.Name,
+					ToolLabel: label,
+					Result:    result.Content,
+					IsError:   true,
+				})
+				results = append(results, result)
+				continue
+			}
+		}
 
 		var result ToolResult
 

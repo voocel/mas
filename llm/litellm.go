@@ -131,6 +131,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 			finishReason string
 			toolAcc      = litellm.NewToolCallAccumulator()
 			toolStarted  = make(map[int]bool)
+			streamUsage  *litellm.Usage // captured from the last chunk
 		)
 
 		for {
@@ -216,6 +217,11 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 			if chunk.FinishReason != "" {
 				finishReason = chunk.FinishReason
 			}
+
+			// Capture usage from the last chunk that carries it
+			if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+				streamUsage = chunk.Usage
+			}
 		}
 
 		// Emit end events for open blocks
@@ -254,6 +260,17 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 					ContentIndex: idx,
 					Message:      partial,
 				}
+			}
+		}
+
+		// Attach usage from stream to the final message
+		if streamUsage != nil && streamUsage.TotalTokens > 0 {
+			partial.Usage = &agentcore.Usage{
+				Input:       streamUsage.PromptTokens,
+				Output:      streamUsage.CompletionTokens,
+				CacheRead:   streamUsage.CacheReadInputTokens,
+				CacheWrite:  streamUsage.CacheCreationInputTokens,
+				TotalTokens: streamUsage.TotalTokens,
 			}
 		}
 

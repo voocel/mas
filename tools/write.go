@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/voocel/agentcore/schema"
 )
 
 // WriteTool writes content to a file, creating directories as needed.
@@ -17,20 +19,10 @@ func (t *WriteTool) Name() string  { return "write" }
 func (t *WriteTool) Label() string { return "Write File" }
 func (t *WriteTool) Description() string { return "Write content to a file. Creates parent directories if needed. Overwrites existing files." }
 func (t *WriteTool) Schema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path": map[string]any{
-				"type":        "string",
-				"description": "Path to the file to write",
-			},
-			"content": map[string]any{
-				"type":        "string",
-				"description": "Content to write to the file",
-			},
-		},
-		"required": []string{"path", "content"},
-	}
+	return schema.Object(
+		schema.Property("path", schema.String("Path to the file to write")).Required(),
+		schema.Property("content", schema.String("Content to write to the file")).Required(),
+	)
 }
 
 type writeArgs struct {

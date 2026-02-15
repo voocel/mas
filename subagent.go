@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/voocel/agentcore/schema"
 )
 
 const (
@@ -92,44 +94,16 @@ func (t *SubAgentTool) Schema() map[string]any {
 	for name := range t.agents {
 		agentNames = append(agentNames, name)
 	}
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"agent": map[string]any{
-				"type":        "string",
-				"description": "Name of the agent to invoke (single mode)",
-				"enum":        agentNames,
-			},
-			"task": map[string]any{
-				"type":        "string",
-				"description": "Task to delegate (single mode)",
-			},
-			"tasks": map[string]any{
-				"type":        "array",
-				"description": "Array of {agent, task} for parallel execution",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"agent": map[string]any{"type": "string", "enum": agentNames},
-						"task":  map[string]any{"type": "string"},
-					},
-					"required": []string{"agent", "task"},
-				},
-			},
-			"chain": map[string]any{
-				"type":        "array",
-				"description": "Array of {agent, task} for sequential execution. Use {previous} in task to reference prior output.",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"agent": map[string]any{"type": "string", "enum": agentNames},
-						"task":  map[string]any{"type": "string"},
-					},
-					"required": []string{"agent", "task"},
-				},
-			},
-		},
-	}
+	taskItem := schema.Object(
+		schema.Property("agent", schema.Enum("Agent name", agentNames...)).Required(),
+		schema.Property("task", schema.String("Task description")).Required(),
+	)
+	return schema.Object(
+		schema.Property("agent", schema.Enum("Name of the agent to invoke (single mode)", agentNames...)),
+		schema.Property("task", schema.String("Task to delegate (single mode)")),
+		schema.Property("tasks", schema.Array("Array of {agent, task} for parallel execution", taskItem)),
+		schema.Property("chain", schema.Array("Array of {agent, task} for sequential execution. Use {previous} in task to reference prior output.", taskItem)),
+	)
 }
 
 func (t *SubAgentTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
@@ -290,8 +264,8 @@ func (t *SubAgentTool) runAgent(ctx context.Context, agentName, task string) (st
 	for ev := range events {
 		switch ev.Type {
 		case EventMessageEnd:
-			if msg, ok := ev.Message.(Message); ok && msg.Role == RoleAssistant {
-				lastAssistantContent = msg.TextContent()
+			if ev.Message != nil && ev.Message.GetRole() == RoleAssistant {
+				lastAssistantContent = ev.Message.TextContent()
 			}
 		case EventError:
 			if ev.Err != nil {

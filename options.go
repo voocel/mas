@@ -70,3 +70,38 @@ func WithMaxRetries(n int) AgentOption {
 func WithMaxToolErrors(n int) AgentOption {
 	return func(a *Agent) { a.maxToolErrors = n }
 }
+
+// WithContextWindow sets the model's context window size in tokens.
+// Used by ContextUsage() to calculate context occupancy percentage.
+func WithContextWindow(n int) AgentOption {
+	return func(a *Agent) { a.contextWindow = n }
+}
+
+// WithContextEstimate sets the context token estimation function.
+// Use memory.ContextEstimateAdapter for the default hybrid estimation.
+func WithContextEstimate(fn ContextEstimateFn) AgentOption {
+	return func(a *Agent) { a.contextEstimateFn = fn }
+}
+
+// WithPermission sets a function called before each tool execution.
+// Return nil to allow, or an error to deny (error becomes tool error result).
+func WithPermission(fn PermissionFunc) AgentOption {
+	return func(a *Agent) { a.permissionFn = fn }
+}
+
+// WithContextPipeline sets both TransformContext and ConvertToLLM in one call.
+// This is the recommended way to configure context compaction:
+//
+//	agentcore.WithContextPipeline(
+//	    memory.NewCompaction(cfg),
+//	    memory.CompactionConvertToLLM,
+//	)
+func WithContextPipeline(
+	transform func(ctx context.Context, msgs []AgentMessage) ([]AgentMessage, error),
+	convert func([]AgentMessage) []Message,
+) AgentOption {
+	return func(a *Agent) {
+		a.transformContext = transform
+		a.convertToLLM = convert
+	}
+}

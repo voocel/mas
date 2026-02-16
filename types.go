@@ -144,10 +144,12 @@ func (u *Usage) Add(other *Usage) {
 type ThinkingLevel string
 
 const (
-	ThinkingOff    ThinkingLevel = "off"
-	ThinkingLow    ThinkingLevel = "low"
-	ThinkingMedium ThinkingLevel = "medium"
-	ThinkingHigh   ThinkingLevel = "high"
+	ThinkingOff     ThinkingLevel = "off"
+	ThinkingMinimal ThinkingLevel = "minimal"
+	ThinkingLow     ThinkingLevel = "low"
+	ThinkingMedium  ThinkingLevel = "medium"
+	ThinkingHigh    ThinkingLevel = "high"
+	ThinkingXHigh   ThinkingLevel = "xhigh"
 )
 
 // ---------------------------------------------------------------------------
@@ -304,6 +306,7 @@ type ToolResult struct {
 	ToolCallID string          `json:"tool_call_id"`
 	Content    json.RawMessage `json:"content,omitempty"`
 	IsError    bool            `json:"is_error,omitempty"`
+	Details    any             `json:"details,omitempty"` // optional metadata for UI display/logging
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +404,19 @@ type LoopConfig struct {
 	// When nil, all tools are allowed.
 	CheckPermission PermissionFunc
 
+	// GetApiKey resolves the API key before each LLM call.
+	// The provider parameter identifies which provider is being called (e.g. "openai", "anthropic").
+	// Enables per-provider key resolution, key rotation, OAuth tokens, and multi-tenant scenarios.
+	// When nil or returns empty string, the model's default key is used.
+	GetApiKey func(provider string) (string, error)
+
+	// ThinkingBudgets maps each ThinkingLevel to a max thinking token count.
+	// When set, the resolved budget is passed to the model alongside the level.
+	ThinkingBudgets map[ThinkingLevel]int
+
+	// SessionID enables provider-level session caching (e.g. Anthropic prompt cache).
+	SessionID string
+
 	// Steering: called after each tool execution to check for user interruptions.
 	GetSteeringMessages func() []AgentMessage
 
@@ -434,7 +450,10 @@ type CallOption func(*CallConfig)
 
 // CallConfig holds per-call configuration resolved from CallOptions.
 type CallConfig struct {
-	ThinkingLevel ThinkingLevel
+	ThinkingLevel  ThinkingLevel
+	ThinkingBudget int    // max thinking tokens, 0 = use provider default
+	APIKey         string // per-call API key override, empty = use model default
+	SessionID      string // provider session caching identifier
 }
 
 // ResolveCallConfig applies options and returns the resolved config.
@@ -451,6 +470,22 @@ func WithThinking(level ThinkingLevel) CallOption {
 	return func(c *CallConfig) { c.ThinkingLevel = level }
 }
 
+// WithThinkingBudget sets the max thinking tokens for a single LLM call.
+func WithThinkingBudget(tokens int) CallOption {
+	return func(c *CallConfig) { c.ThinkingBudget = tokens }
+}
+
+// WithAPIKey overrides the API key for a single LLM call.
+// Enables key rotation, OAuth short-lived tokens, and multi-tenant scenarios.
+func WithAPIKey(key string) CallOption {
+	return func(c *CallConfig) { c.APIKey = key }
+}
+
+// WithCallSessionID sets a session identifier for a single LLM call.
+func WithCallSessionID(id string) CallOption {
+	return func(c *CallConfig) { c.SessionID = id }
+}
+
 // ---------------------------------------------------------------------------
 // ChatModel Interface
 // ---------------------------------------------------------------------------
@@ -460,6 +495,13 @@ type ChatModel interface {
 	Generate(ctx context.Context, messages []Message, tools []ToolSpec, opts ...CallOption) (*LLMResponse, error)
 	GenerateStream(ctx context.Context, messages []Message, tools []ToolSpec, opts ...CallOption) (<-chan StreamEvent, error)
 	SupportsTools() bool
+}
+
+// ProviderNamer is an optional interface for ChatModel implementations
+// to expose their provider name (e.g. "openai", "anthropic", "gemini").
+// Used by the agent loop to pass provider context to GetApiKey callbacks.
+type ProviderNamer interface {
+	ProviderName() string
 }
 
 // ---------------------------------------------------------------------------

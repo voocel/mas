@@ -194,10 +194,15 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 }
 
 // callLLMWithRetry wraps callLLM with retry logic for retryable errors.
+// Context overflow errors trigger automatic compaction and a single retry.
 func callLLMWithRetry(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch chan<- Event) (Message, error) {
 	maxRetries := config.MaxRetries
 	if maxRetries <= 0 {
-		return callLLM(ctx, agentCtx, config, ch)
+		msg, err := callLLM(ctx, agentCtx, config, ch)
+		if err != nil && IsContextOverflow(err) {
+			return recoverOverflow(ctx, agentCtx, config, ch, err)
+		}
+		return msg, err
 	}
 
 	var lastErr error
@@ -207,6 +212,11 @@ func callLLMWithRetry(ctx context.Context, agentCtx *AgentContext, config LoopCo
 			return msg, nil
 		}
 		lastErr = err
+
+		// Context overflow: compact and retry once (not a normal retry)
+		if IsContextOverflow(err) {
+			return recoverOverflow(ctx, agentCtx, config, ch, err)
+		}
 
 		if !litellm.IsRetryableError(err) || attempt == maxRetries {
 			return Message{}, err
@@ -232,6 +242,32 @@ func callLLMWithRetry(ctx context.Context, agentCtx *AgentContext, config LoopCo
 		}
 	}
 	return Message{}, lastErr
+}
+
+// recoverOverflow attempts to compact the context and retry the LLM call.
+// If no TransformContext is configured, the original error is returned.
+func recoverOverflow(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch chan<- Event, originalErr error) (Message, error) {
+	if config.TransformContext == nil {
+		return Message{}, fmt.Errorf("context overflow (no compaction configured): %w", originalErr)
+	}
+
+	emit(ch, Event{
+		Type: EventRetry,
+		Err:  originalErr,
+		RetryInfo: &RetryInfo{
+			Attempt:    1,
+			MaxRetries: 1,
+			Err:        fmt.Errorf("context overflow detected, compacting and retrying"),
+		},
+	})
+
+	compacted, err := config.TransformContext(ctx, agentCtx.Messages)
+	if err != nil {
+		return Message{}, fmt.Errorf("overflow recovery compaction failed: %w", err)
+	}
+
+	agentCtx.Messages = compacted
+	return callLLM(ctx, agentCtx, config, ch)
 }
 
 // retryDelay calculates the wait duration using exponential backoff,
@@ -305,8 +341,31 @@ func callLLM(ctx context.Context, agentCtx *AgentContext, config LoopConfig, ch 
 
 	// Build per-call options
 	var callOpts []CallOption
+
+	// Dynamic API key resolution
+	if config.GetApiKey != nil {
+		provider := ""
+		if pn, ok := config.Model.(ProviderNamer); ok {
+			provider = pn.ProviderName()
+		}
+		if key, err := config.GetApiKey(provider); err == nil && key != "" {
+			callOpts = append(callOpts, WithAPIKey(key))
+		}
+	}
+
+	// Thinking level + budget
 	if config.ThinkingLevel != "" && config.ThinkingLevel != ThinkingOff {
 		callOpts = append(callOpts, WithThinking(config.ThinkingLevel))
+		if config.ThinkingBudgets != nil {
+			if budget, ok := config.ThinkingBudgets[config.ThinkingLevel]; ok && budget > 0 {
+				callOpts = append(callOpts, WithThinkingBudget(budget))
+			}
+		}
+	}
+
+	// Session ID for provider caching
+	if config.SessionID != "" {
+		callOpts = append(callOpts, WithCallSessionID(config.SessionID))
 	}
 
 	// Use streaming for real-time token deltas
@@ -442,6 +501,14 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 				Content:    errContent,
 				IsError:    true,
 			}
+		} else if err := validateToolArgs(tool, call.Args); err != nil {
+			// Argument validation failed — return error to LLM without counting as tool error.
+			errContent, _ := json.Marshal(err.Error())
+			result = ToolResult{
+				ToolCallID: call.ID,
+				Content:    errContent,
+				IsError:    true,
+			}
 		} else {
 			// Inject progress callback so tools can report partial results
 			progressCtx := WithToolProgress(ctx, func(partial json.RawMessage) {
@@ -566,6 +633,92 @@ func buildToolSpecs(tools []Tool) []ToolSpec {
 		})
 	}
 	return specs
+}
+
+// validateToolArgs validates tool call arguments against the tool's JSON Schema.
+// Checks required fields and basic type matching. Returns nil if valid or schema is unavailable.
+// On failure, returns a formatted error message suitable for sending back to the LLM.
+func validateToolArgs(tool Tool, args json.RawMessage) error {
+	schema := tool.Schema()
+	if schema == nil {
+		return nil
+	}
+
+	// Parse arguments
+	var parsed map[string]any
+	if err := json.Unmarshal(args, &parsed); err != nil {
+		return fmt.Errorf("validation failed for tool %q: invalid JSON: %w", tool.Name(), err)
+	}
+
+	// Check required fields
+	if reqSlice, ok := schema["required"]; ok {
+		if required, ok := reqSlice.([]string); ok {
+			for _, field := range required {
+				if _, exists := parsed[field]; !exists {
+					return fmt.Errorf("validation failed for tool %q: missing required field %q", tool.Name(), field)
+				}
+			}
+		}
+	}
+
+	// Check property types
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for key, val := range parsed {
+			propSchema, exists := props[key]
+			if !exists {
+				continue
+			}
+			ps, ok := propSchema.(map[string]any)
+			if !ok {
+				continue
+			}
+			expectedType, _ := ps["type"].(string)
+			if expectedType == "" {
+				continue
+			}
+			if err := checkType(key, val, expectedType); err != nil {
+				return fmt.Errorf("validation failed for tool %q: %w", tool.Name(), err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkType validates a single value against an expected JSON Schema type.
+func checkType(field string, val any, expected string) error {
+	switch expected {
+	case "string":
+		if _, ok := val.(string); !ok {
+			return fmt.Errorf("field %q: expected string, got %T", field, val)
+		}
+	case "integer":
+		switch v := val.(type) {
+		case float64:
+			if v != float64(int64(v)) {
+				return fmt.Errorf("field %q: expected integer, got float", field)
+			}
+		default:
+			return fmt.Errorf("field %q: expected integer, got %T", field, val)
+		}
+	case "number":
+		if _, ok := val.(float64); !ok {
+			return fmt.Errorf("field %q: expected number, got %T", field, val)
+		}
+	case "boolean":
+		if _, ok := val.(bool); !ok {
+			return fmt.Errorf("field %q: expected boolean, got %T", field, val)
+		}
+	case "array":
+		if _, ok := val.([]any); !ok {
+			return fmt.Errorf("field %q: expected array, got %T", field, val)
+		}
+	case "object":
+		if _, ok := val.(map[string]any); !ok {
+			return fmt.Errorf("field %q: expected object, got %T", field, val)
+		}
+	}
+	return nil
 }
 
 func findTool(tools []Tool, name string) Tool {

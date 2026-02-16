@@ -89,6 +89,25 @@ func WithPermission(fn PermissionFunc) AgentOption {
 	return func(a *Agent) { a.permissionFn = fn }
 }
 
+// WithGetApiKey sets a dynamic API key resolver called before each LLM call.
+// The provider parameter identifies which provider is being called (e.g. "openai", "anthropic").
+// Enables per-provider key resolution, key rotation, OAuth short-lived tokens, and multi-tenant scenarios.
+func WithGetApiKey(fn func(provider string) (string, error)) AgentOption {
+	return func(a *Agent) { a.getApiKey = fn }
+}
+
+// WithThinkingBudgets sets per-level thinking token budgets.
+// Each ThinkingLevel maps to a max thinking token count.
+func WithThinkingBudgets(budgets map[ThinkingLevel]int) AgentOption {
+	return func(a *Agent) { a.thinkingBudgets = budgets }
+}
+
+// WithSessionID sets a session identifier for provider-level caching.
+// Forwarded to providers that support session-based prompt caching.
+func WithSessionID(id string) AgentOption {
+	return func(a *Agent) { a.sessionID = id }
+}
+
 // WithContextPipeline sets both TransformContext and ConvertToLLM in one call.
 // This is the recommended way to configure context compaction:
 //

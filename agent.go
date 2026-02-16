@@ -38,6 +38,9 @@ type Agent struct {
 	contextWindow     int
 	contextEstimateFn ContextEstimateFn
 	permissionFn      PermissionFunc
+	getApiKey         func(provider string) (string, error)
+	thinkingBudgets   map[ThinkingLevel]int
+	sessionID         string
 
 	// State
 	messages         []AgentMessage
@@ -314,6 +317,35 @@ func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
 	a.thinkingLevel = level
 }
 
+// ClearSteeringQueue removes all queued steering messages.
+func (a *Agent) ClearSteeringQueue() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steeringQ = nil
+}
+
+// ClearFollowUpQueue removes all queued follow-up messages.
+func (a *Agent) ClearFollowUpQueue() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.followUpQ = nil
+}
+
+// ClearAllQueues removes all queued steering and follow-up messages.
+func (a *Agent) ClearAllQueues() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steeringQ = nil
+	a.followUpQ = nil
+}
+
+// HasQueuedMessages reports whether any steering or follow-up messages are queued.
+func (a *Agent) HasQueuedMessages() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.steeringQ) > 0 || len(a.followUpQ) > 0
+}
+
 // Reset clears all state and queues.
 func (a *Agent) Reset() {
 	a.mu.Lock()
@@ -340,6 +372,9 @@ func (a *Agent) buildConfig() LoopConfig {
 		TransformContext: a.transformContext,
 		ConvertToLLM:     a.convertToLLM,
 		CheckPermission:  a.permissionFn,
+		GetApiKey:        a.getApiKey,
+		ThinkingBudgets:  a.thinkingBudgets,
+		SessionID:        a.sessionID,
 		GetSteeringMessages: func() []AgentMessage {
 			a.mu.Lock()
 			defer a.mu.Unlock()

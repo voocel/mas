@@ -42,40 +42,43 @@ func NewLiteLLMAdapter(model string, client *litellm.Client) *LiteLLMAdapter {
 	}
 }
 
-// NewOpenAIModel creates an OpenAI adapter.
-func NewOpenAIModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
+// newProviderAdapter is the shared constructor for all provider adapters.
+func newProviderAdapter(provider, model, apiKey string, baseURL ...string) (*LiteLLMAdapter, error) {
 	cfg := litellm.ProviderConfig{APIKey: apiKey}
 	if len(baseURL) > 0 {
 		cfg.BaseURL = baseURL[0]
 	}
-	client, _ := litellm.NewWithProvider("openai", cfg)
-	return NewLiteLLMAdapter(model, client)
+	client, err := litellm.NewWithProvider(provider, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", provider, err)
+	}
+	return NewLiteLLMAdapter(model, client), nil
+}
+
+// NewOpenAIModel creates an OpenAI adapter.
+func NewOpenAIModel(model, apiKey string, baseURL ...string) (*LiteLLMAdapter, error) {
+	return newProviderAdapter("openai", model, apiKey, baseURL...)
 }
 
 // NewAnthropicModel creates an Anthropic adapter.
-func NewAnthropicModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
-	cfg := litellm.ProviderConfig{APIKey: apiKey}
-	if len(baseURL) > 0 {
-		cfg.BaseURL = baseURL[0]
-	}
-	client, _ := litellm.NewWithProvider("anthropic", cfg)
-	return NewLiteLLMAdapter(model, client)
+func NewAnthropicModel(model, apiKey string, baseURL ...string) (*LiteLLMAdapter, error) {
+	return newProviderAdapter("anthropic", model, apiKey, baseURL...)
 }
 
 // NewGeminiModel creates a Gemini adapter.
-func NewGeminiModel(model, apiKey string, baseURL ...string) *LiteLLMAdapter {
-	cfg := litellm.ProviderConfig{APIKey: apiKey}
-	if len(baseURL) > 0 {
-		cfg.BaseURL = baseURL[0]
-	}
-	client, _ := litellm.NewWithProvider("gemini", cfg)
-	return NewLiteLLMAdapter(model, client)
+func NewGeminiModel(model, apiKey string, baseURL ...string) (*LiteLLMAdapter, error) {
+	return newProviderAdapter("gemini", model, apiKey, baseURL...)
+}
+
+// ProviderName returns the provider name (e.g. "openai", "anthropic").
+// Implements agentcore.ProviderNamer for per-provider API key resolution.
+func (l *LiteLLMAdapter) ProviderName() string {
+	return l.Info().Provider
 }
 
 // Generate produces a synchronous response.
 func (l *LiteLLMAdapter) Generate(ctx context.Context, messages []Message, tools []ToolSpec, opts ...CallOption) (*LLMResponse, error) {
 	cfg := l.GetConfig()
-
 	llmMessages := convertMessages(messages)
 
 	ltReq := &litellm.Request{
@@ -85,7 +88,7 @@ func (l *LiteLLMAdapter) Generate(ctx context.Context, messages []Message, tools
 		MaxTokens:   &cfg.MaxTokens,
 	}
 
-	applyThinkingConfig(ltReq, opts)
+	applyCallConfig(ltReq, opts)
 	applyToolConfig(ltReq, tools)
 
 	ltResp, err := l.client.Chat(ctx, ltReq)
@@ -100,7 +103,6 @@ func (l *LiteLLMAdapter) Generate(ctx context.Context, messages []Message, tools
 // GenerateStream produces a streaming response with fine-grained events.
 func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message, tools []ToolSpec, opts ...CallOption) (<-chan StreamEvent, error) {
 	cfg := l.GetConfig()
-
 	llmMessages := convertMessages(messages)
 
 	request := &litellm.Request{
@@ -110,7 +112,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 		MaxTokens:   &cfg.MaxTokens,
 	}
 
-	applyThinkingConfig(request, opts)
+	applyCallConfig(request, opts)
 	applyToolConfig(request, tools)
 
 	stream, err := l.client.Stream(ctx, request)
@@ -292,38 +294,74 @@ func lastBlockIndex(blocks []agentcore.ContentBlock, ct agentcore.ContentType) i
 }
 
 // convertMessages converts agentcore.Message to litellm.Message.
+// Handles multipart content (text + images) via litellm.Contents field.
 func convertMessages(messages []Message) []litellm.Message {
 	llmMessages := make([]litellm.Message, len(messages))
 	for i, msg := range messages {
-		llmMsg := litellm.Message{
-			Role:    string(msg.Role),
-			Content: msg.TextContent(),
-		}
-
-		if msg.Role == agentcore.RoleTool {
-			if id, ok := msg.Metadata["tool_call_id"].(string); ok {
-				llmMsg.ToolCallID = id
-			}
-		}
-
-		toolCalls := msg.ToolCalls()
-		if len(toolCalls) > 0 {
-			llmMsg.ToolCalls = make([]litellm.ToolCall, len(toolCalls))
-			for idx, call := range toolCalls {
-				llmMsg.ToolCalls[idx] = litellm.ToolCall{
-					ID:   call.ID,
-					Type: "function",
-					Function: litellm.FunctionCall{
-						Name:      call.Name,
-						Arguments: string(call.Args),
-					},
-				}
-			}
-		}
-
+		llmMsg := convertSingleMessage(msg)
 		llmMessages[i] = llmMsg
 	}
 	return llmMessages
+}
+
+// hasImageContent reports whether any content block is an image.
+func hasImageContent(blocks []agentcore.ContentBlock) bool {
+	for _, b := range blocks {
+		if b.Type == agentcore.ContentImage && b.Image != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// convertSingleMessage converts one agentcore.Message to litellm.Message.
+func convertSingleMessage(msg Message) litellm.Message {
+	llmMsg := litellm.Message{
+		Role: string(msg.Role),
+	}
+
+	// Multipart: if message contains images, use Contents field
+	if hasImageContent(msg.Content) {
+		var parts []litellm.MessageContent
+		for _, b := range msg.Content {
+			switch b.Type {
+			case agentcore.ContentText:
+				parts = append(parts, litellm.TextContent(b.Text))
+			case agentcore.ContentImage:
+				if b.Image != nil {
+					// Base64 data URI format: data:<mime>;base64,<data>
+					url := "data:" + b.Image.MimeType + ";base64," + b.Image.Data
+					parts = append(parts, litellm.ImageContent(url))
+				}
+			}
+		}
+		llmMsg.Contents = parts
+	} else {
+		llmMsg.Content = msg.TextContent()
+	}
+
+	if msg.Role == agentcore.RoleTool {
+		if id, ok := msg.Metadata["tool_call_id"].(string); ok {
+			llmMsg.ToolCallID = id
+		}
+	}
+
+	toolCalls := msg.ToolCalls()
+	if len(toolCalls) > 0 {
+		llmMsg.ToolCalls = make([]litellm.ToolCall, len(toolCalls))
+		for idx, call := range toolCalls {
+			llmMsg.ToolCalls[idx] = litellm.ToolCall{
+				ID:   call.ID,
+				Type: "function",
+				Function: litellm.FunctionCall{
+					Name:      call.Name,
+					Arguments: string(call.Args),
+				},
+			}
+		}
+	}
+
+	return llmMsg
 }
 
 // convertResponse converts litellm.Response to agentcore.Message with content blocks.
@@ -385,13 +423,31 @@ func mapStopReason(reason string) agentcore.StopReason {
 	}
 }
 
-// applyThinkingConfig resolves CallOptions and sets ThinkingConfig on the request.
-func applyThinkingConfig(req *litellm.Request, opts []CallOption) {
+// applyCallConfig resolves CallOptions once and applies API key, thinking, and
+// session config to the litellm request.
+func applyCallConfig(req *litellm.Request, opts []CallOption) {
 	callCfg := agentcore.ResolveCallConfig(opts)
-	if callCfg.ThinkingLevel == "" || callCfg.ThinkingLevel == agentcore.ThinkingOff {
-		return
+
+	// Per-request API key override
+	if callCfg.APIKey != "" {
+		req.APIKey = callCfg.APIKey
 	}
-	req.Thinking = litellm.NewThinkingWithLevel(string(callCfg.ThinkingLevel))
+
+	// Thinking level + budget
+	if callCfg.ThinkingLevel != "" && callCfg.ThinkingLevel != agentcore.ThinkingOff {
+		req.Thinking = litellm.NewThinkingWithLevel(string(callCfg.ThinkingLevel))
+		if callCfg.ThinkingBudget > 0 {
+			req.Thinking.BudgetTokens = &callCfg.ThinkingBudget
+		}
+	}
+
+	// Session ID for provider caching
+	if callCfg.SessionID != "" {
+		if req.Extra == nil {
+			req.Extra = make(map[string]any)
+		}
+		req.Extra["session_id"] = callCfg.SessionID
+	}
 }
 
 func applyToolConfig(request *litellm.Request, tools []ToolSpec) {

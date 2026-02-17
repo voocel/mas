@@ -40,7 +40,7 @@ var DefaultGenerationConfig = &GenerationConfig{
 	Temperature:      0.7,
 	TopP:             0.9,
 	TopK:             0,
-	MaxTokens:        1000,
+	MaxTokens:        65536,
 	StopSequences:    []string{},
 	PresencePenalty:  0.0,
 	FrequencyPenalty: 0.0,

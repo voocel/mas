@@ -136,15 +136,24 @@ func runLoop(ctx context.Context, currentCtx *AgentContext, newMessages *[]Agent
 				return
 			}
 
-			currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
-			*newMessages = append(*newMessages, assistantMsg)
-
 			// Check stop reason — terminate early on error/aborted
 			if assistantMsg.StopReason == StopReasonError || assistantMsg.StopReason == StopReasonAborted {
+				currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
+				*newMessages = append(*newMessages, assistantMsg)
 				emit(ch, Event{Type: EventTurnEnd, Message: assistantMsg})
 				emit(ch, Event{Type: EventAgentEnd, NewMessages: *newMessages})
 				return
 			}
+
+			// When output was truncated (max_tokens hit), tool calls are likely
+			// incomplete with malformed JSON args. Strip them to avoid validation
+			// errors and API rejections.
+			if assistantMsg.StopReason == StopReasonLength {
+				assistantMsg.Content = stripToolCallBlocks(assistantMsg.Content)
+			}
+
+			currentCtx.Messages = append(currentCtx.Messages, assistantMsg)
+			*newMessages = append(*newMessages, assistantMsg)
 
 			// Check for tool calls
 			toolCalls := assistantMsg.ToolCalls()
@@ -606,6 +615,19 @@ func skipToolCall(call ToolCall, tools []Tool, ch chan<- Event) ToolResult {
 // toolResultToMessage converts a ToolResult into a Message for the context.
 func toolResultToMessage(tr ToolResult) Message {
 	return ToolResultMsg(tr.ToolCallID, tr.Content, tr.IsError)
+}
+
+// stripToolCallBlocks removes ContentToolCall blocks from a content slice.
+// Used when the model's output was truncated (StopReasonLength), where tool
+// call arguments are likely incomplete / malformed JSON.
+func stripToolCallBlocks(blocks []ContentBlock) []ContentBlock {
+	filtered := blocks[:0:0]
+	for _, b := range blocks {
+		if b.Type != ContentToolCall {
+			filtered = append(filtered, b)
+		}
+	}
+	return filtered
 }
 
 // toolLabel returns the human-readable label for a tool.

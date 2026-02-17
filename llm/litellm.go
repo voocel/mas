@@ -149,6 +149,14 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 				continue
 			}
 
+			// Stream completed — break to emit final events.
+			if chunk.Done {
+				if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+					streamUsage = chunk.Usage
+				}
+				break
+			}
+
 			// Reasoning/thinking chunks
 			if chunk.Reasoning != nil && chunk.Reasoning.Content != "" {
 				if !thinkStarted {
@@ -344,6 +352,9 @@ func convertSingleMessage(msg Message) litellm.Message {
 		if id, ok := msg.Metadata["tool_call_id"].(string); ok {
 			llmMsg.ToolCallID = id
 		}
+		if isErr, ok := msg.Metadata["is_error"].(bool); ok {
+			llmMsg.IsError = isErr
+		}
 	}
 
 	toolCalls := msg.ToolCalls()
@@ -469,5 +480,4 @@ func applyToolConfig(request *litellm.Request, tools []ToolSpec) {
 		})
 	}
 	request.Tools = ltTools
-	request.ToolChoice = "auto"
 }

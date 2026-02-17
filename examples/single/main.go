@@ -16,7 +16,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	model := llm.NewOpenAIModel("gpt-4.1-mini", apiKey)
+	model, err := llm.NewOpenAIModel("gpt-5-mini", apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "model error: %v\n", err)
+		os.Exit(1)
+	}
 
 	agent := agentcore.NewAgent(
 		agentcore.WithModel(model),
@@ -34,11 +38,11 @@ func main() {
 	agent.Subscribe(func(ev agentcore.Event) {
 		switch ev.Type {
 		case agentcore.EventMessageEnd:
-			if msg, ok := ev.Message.(agentcore.Message); ok && msg.Role == agentcore.RoleAssistant {
-				fmt.Printf("\nAssistant: %s\n", msg.TextContent())
+			if ev.Message != nil && ev.Message.GetRole() == agentcore.RoleAssistant {
+				fmt.Printf("\nAssistant: %s\n", ev.Message.TextContent())
 			}
 		case agentcore.EventToolExecStart:
-			fmt.Printf("  [tool] %s(%v)\n", ev.Tool, string(ev.Args.([]byte)))
+			fmt.Printf("  [tool] %s(%s)\n", ev.Tool, string(ev.Args))
 		case agentcore.EventToolExecEnd:
 			if ev.IsError {
 				fmt.Printf("  [tool] %s error\n", ev.Tool)

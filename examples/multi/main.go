@@ -16,8 +16,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	mainModel := llm.NewOpenAIModel("gpt-4.1-mini", apiKey)
-	scoutModel := llm.NewOpenAIModel("gpt-4.1-mini", apiKey)
+	mainModel, err := llm.NewOpenAIModel("gpt-5-mini", apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "model error: %v\n", err)
+		os.Exit(1)
+	}
+	scoutModel, err := llm.NewOpenAIModel("gpt-5-mini", apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "model error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Define sub-agent configurations (like pi's .md agent files)
 	scout := agentcore.SubAgentConfig{
@@ -66,8 +74,8 @@ func main() {
 	agent.Subscribe(func(ev agentcore.Event) {
 		switch ev.Type {
 		case agentcore.EventMessageEnd:
-			if msg, ok := ev.Message.(agentcore.Message); ok && msg.Role == agentcore.RoleAssistant {
-				fmt.Printf("\nAssistant: %s\n", msg.TextContent())
+			if ev.Message != nil && ev.Message.GetRole() == agentcore.RoleAssistant {
+				fmt.Printf("\nAssistant: %s\n", ev.Message.TextContent())
 			}
 		case agentcore.EventToolExecStart:
 			fmt.Printf("  [tool] %s\n", ev.Tool)

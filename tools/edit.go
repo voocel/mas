@@ -87,11 +87,12 @@ func (t *EditTool) Execute(_ context.Context, args json.RawMessage) (json.RawMes
 	}
 
 	// Generate unified diff
-	diff := generateDiff(baseContent, newContent)
+	diff, firstLine := generateDiff(baseContent, newContent)
 
 	return json.Marshal(map[string]any{
-		"message": fmt.Sprintf("Successfully replaced text in %s.", a.Path),
-		"diff":    diff,
+		"message":            fmt.Sprintf("Successfully replaced text in %s.", a.Path),
+		"diff":               diff,
+		"first_changed_line": firstLine,
 	})
 }
 
@@ -177,7 +178,7 @@ func fuzzyFind(content, oldText string) (index, matchLen int, baseContent string
 // --- Diff generation (matching pi's generateDiffString) ---
 
 // generateDiff produces a unified diff with line numbers and context.
-func generateDiff(oldContent, newContent string) string {
+func generateDiff(oldContent, newContent string) (string, int) {
 	const contextLines = 4
 
 	oldLines := strings.Split(oldContent, "\n")
@@ -201,8 +202,10 @@ func generateDiff(oldContent, newContent string) string {
 		suffixNew--
 	}
 
+	firstChangedLine := prefix + 1 // 1-based
+
 	if prefix > suffixOld+1 && prefix > suffixNew+1 {
-		return "(no changes)"
+		return "(no changes)", firstChangedLine
 	}
 
 	// Build diff output with context
@@ -242,5 +245,5 @@ func generateDiff(oldContent, newContent string) string {
 		fmt.Fprintf(&sb, " %*s ...\n", lineNumWidth, "")
 	}
 
-	return sb.String()
+	return sb.String(), firstChangedLine
 }

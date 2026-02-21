@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"os"
 	"os/exec"
 	"time"
 
@@ -64,14 +64,24 @@ func (t *BashTool) Execute(ctx context.Context, args json.RawMessage) (json.RawM
 		cmd.Dir = t.WorkDir
 	}
 
-	// Merge stdout and stderr into a single pipe for streaming
-	pr, pw := io.Pipe()
+	// Use OS pipe so that cmd.Wait() returns as soon as the shell process
+	// exits, without blocking on I/O from background subprocesses that
+	// inherit the pipe's write end. (io.Pipe causes Wait to block because
+	// Go internally creates goroutines to copy from OS fd to the writer,
+	// and Wait waits for those goroutines.)
+	pr, pw, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		return nil, fmt.Errorf("create pipe: %w", pipeErr)
+	}
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 
 	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
 		return nil, fmt.Errorf("start command: %w", err)
 	}
+	pw.Close() // Parent doesn't write; child processes still hold their copy.
 
 	// Stream output line by line via tool progress
 	var output []byte
@@ -90,7 +100,15 @@ func (t *BashTool) Execute(ctx context.Context, args json.RawMessage) (json.RawM
 	}()
 
 	err := cmd.Wait()
-	pw.Close()
+
+	// Shell has exited. Drain any remaining buffered output, then close
+	// the read end to release the file descriptor. If a background process
+	// still holds the write end open, force-close unblocks the reader.
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+	}
+	pr.Close()
 	<-done
 
 	outStr := string(output)

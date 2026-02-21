@@ -531,7 +531,15 @@ func executeToolCalls(ctx context.Context, tools []Tool, calls []ToolCall, confi
 				})
 			})
 
-			output, err := tool.Execute(progressCtx, call.Args)
+			var output json.RawMessage
+			var execErr error
+			if len(config.Middlewares) > 0 {
+				exec := buildMiddlewareChain(tool, call, config.Middlewares)
+				output, execErr = exec(progressCtx, call.Args)
+			} else {
+				output, execErr = tool.Execute(progressCtx, call.Args)
+			}
+			err := execErr
 			if err != nil {
 				errContent, _ := json.Marshal(err.Error())
 				result = ToolResult{
@@ -741,6 +749,20 @@ func checkType(field string, val any, expected string) error {
 		}
 	}
 	return nil
+}
+
+// buildMiddlewareChain wraps a tool's Execute with the middleware stack.
+// Outermost middleware is called first; innermost calls the actual tool.
+func buildMiddlewareChain(tool Tool, call ToolCall, middlewares []ToolMiddleware) ToolExecuteFunc {
+	exec := ToolExecuteFunc(tool.Execute)
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		mw := middlewares[i]
+		next := exec
+		exec = func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+			return mw(ctx, call, next)
+		}
+	}
+	return exec
 }
 
 func findTool(tools []Tool, name string) Tool {

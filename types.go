@@ -108,6 +108,27 @@ const (
 // Usage
 // ---------------------------------------------------------------------------
 
+// Cost tracks monetary cost for a single LLM call in USD.
+type Cost struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read"`
+	CacheWrite float64 `json:"cache_write"`
+	Total      float64 `json:"total"`
+}
+
+// Add accumulates another Cost into this one (nil-safe).
+func (c *Cost) Add(other *Cost) {
+	if other == nil {
+		return
+	}
+	c.Input += other.Input
+	c.Output += other.Output
+	c.CacheRead += other.CacheRead
+	c.CacheWrite += other.CacheWrite
+	c.Total += other.Total
+}
+
 // Usage tracks token consumption for a single LLM call.
 //
 // Field semantics:
@@ -116,12 +137,14 @@ const (
 //   - CacheRead: tokens served from prompt cache (Anthropic: cache_read_input_tokens)
 //   - CacheWrite: tokens written to prompt cache (Anthropic: cache_creation_input_tokens)
 //   - TotalTokens: provider-reported total, typically Input + Output
+//   - Cost: monetary cost computed from model pricing (nil if pricing unavailable)
 type Usage struct {
-	Input       int `json:"input"`
-	Output      int `json:"output"`
-	CacheRead   int `json:"cache_read"`
-	CacheWrite  int `json:"cache_write"`
-	TotalTokens int `json:"total_tokens"`
+	Input       int   `json:"input"`
+	Output      int   `json:"output"`
+	CacheRead   int   `json:"cache_read"`
+	CacheWrite  int   `json:"cache_write"`
+	TotalTokens int   `json:"total_tokens"`
+	Cost        *Cost `json:"cost,omitempty"`
 }
 
 // Add accumulates another Usage into this one (nil-safe).
@@ -134,6 +157,12 @@ func (u *Usage) Add(other *Usage) {
 	u.CacheRead += other.CacheRead
 	u.CacheWrite += other.CacheWrite
 	u.TotalTokens += other.TotalTokens
+	if other.Cost != nil {
+		if u.Cost == nil {
+			u.Cost = &Cost{}
+		}
+		u.Cost.Add(other.Cost)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +363,15 @@ type ToolLabeler interface {
 // Receives context.Context to support I/O (e.g. TUI confirmation, remote policy).
 type PermissionFunc func(ctx context.Context, call ToolCall) error
 
+// ToolExecuteFunc is the function signature for tool execution.
+// Used as the "next" parameter in middleware chains.
+type ToolExecuteFunc func(ctx context.Context, args json.RawMessage) (json.RawMessage, error)
+
+// ToolMiddleware wraps tool execution with cross-cutting concerns.
+// Call next to continue the chain; skip next to short-circuit execution.
+// Example: logging, timing, argument/result modification, audit.
+type ToolMiddleware func(ctx context.Context, call ToolCall, next ToolExecuteFunc) (json.RawMessage, error)
+
 // FuncTool wraps a function as a Tool (convenience helper).
 type FuncTool struct {
 	name        string
@@ -422,6 +460,10 @@ type LoopConfig struct {
 
 	// FollowUp: called when the agent would otherwise stop.
 	GetFollowUpMessages func() []AgentMessage
+
+	// Middlewares are applied around each tool execution (outermost first).
+	// Use for logging, timing, argument/result modification, etc.
+	Middlewares []ToolMiddleware
 }
 
 // ---------------------------------------------------------------------------

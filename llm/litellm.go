@@ -34,6 +34,12 @@ func NewLiteLLMAdapter(model string, client *litellm.Client) *LiteLLMAdapter {
 		modelInfo.MaxTokens = caps.MaxOutputTokens
 		modelInfo.ContextSize = caps.MaxInputTokens
 	}
+	if p, ok := litellm.GetModelPricing(model); ok {
+		modelInfo.Pricing = &ModelPricing{
+			InputPerToken:  p.InputCostPerToken,
+			OutputPerToken: p.OutputCostPerToken,
+		}
+	}
 
 	return &LiteLLMAdapter{
 		BaseModel: NewBaseModel(modelInfo, DefaultGenerationConfig),
@@ -97,6 +103,9 @@ func (l *LiteLLMAdapter) Generate(ctx context.Context, messages []Message, tools
 	}
 
 	msg := convertResponse(ltResp)
+	if msg.Usage != nil {
+		msg.Usage.Cost = CalculateCost(l.Info().Pricing, msg.Usage)
+	}
 	return &LLMResponse{Message: msg}, nil
 }
 
@@ -282,6 +291,7 @@ func (l *LiteLLMAdapter) GenerateStream(ctx context.Context, messages []Message,
 				CacheWrite:  streamUsage.CacheCreationInputTokens,
 				TotalTokens: streamUsage.TotalTokens,
 			}
+			partial.Usage.Cost = CalculateCost(l.Info().Pricing, partial.Usage)
 		}
 
 		partial.StopReason = mapStopReason(finishReason)
@@ -445,11 +455,14 @@ func applyCallConfig(req *litellm.Request, opts []CallOption) {
 	}
 
 	// Thinking level + budget
+	// Anthropic requires temperature=1 when thinking is enabled.
 	if callCfg.ThinkingLevel != "" && callCfg.ThinkingLevel != agentcore.ThinkingOff {
 		req.Thinking = litellm.NewThinkingWithLevel(string(callCfg.ThinkingLevel))
 		if callCfg.ThinkingBudget > 0 {
 			req.Thinking.BudgetTokens = &callCfg.ThinkingBudget
 		}
+		t := 1.0
+		req.Temperature = &t
 	}
 
 	// Session ID for provider caching

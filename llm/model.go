@@ -2,14 +2,40 @@ package llm
 
 import "github.com/voocel/agentcore"
 
+// ModelPricing defines per-token cost rates in USD.
+// Set rates to 0 for categories that don't apply.
+type ModelPricing struct {
+	InputPerToken      float64 `json:"input_per_token"`
+	OutputPerToken     float64 `json:"output_per_token"`
+	CacheReadPerToken  float64 `json:"cache_read_per_token"`
+	CacheWritePerToken float64 `json:"cache_write_per_token"`
+}
+
+// CalculateCost computes the monetary cost from pricing rates and token usage.
+// Returns nil if pricing or usage is nil.
+func CalculateCost(pricing *ModelPricing, usage *agentcore.Usage) *agentcore.Cost {
+	if pricing == nil || usage == nil {
+		return nil
+	}
+	c := &agentcore.Cost{
+		Input:      float64(usage.Input) * pricing.InputPerToken,
+		Output:     float64(usage.Output) * pricing.OutputPerToken,
+		CacheRead:  float64(usage.CacheRead) * pricing.CacheReadPerToken,
+		CacheWrite: float64(usage.CacheWrite) * pricing.CacheWritePerToken,
+	}
+	c.Total = c.Input + c.Output + c.CacheRead + c.CacheWrite
+	return c
+}
+
 // ModelInfo contains basic model metadata.
 type ModelInfo struct {
-	Name         string   `json:"name"`
-	Provider     string   `json:"provider"`
-	Version      string   `json:"version"`
-	MaxTokens    int      `json:"max_tokens"`
-	ContextSize  int      `json:"context_size"`
-	Capabilities []string `json:"capabilities"`
+	Name         string        `json:"name"`
+	Provider     string        `json:"provider"`
+	Version      string        `json:"version"`
+	MaxTokens    int           `json:"max_tokens"`
+	ContextSize  int           `json:"context_size"`
+	Capabilities []string      `json:"capabilities"`
+	Pricing      *ModelPricing `json:"pricing,omitempty"`
 }
 
 // ModelCapability defines capability identifiers.
@@ -92,6 +118,7 @@ type (
 	StreamEvent  = agentcore.StreamEvent
 	StopReason   = agentcore.StopReason
 	Usage        = agentcore.Usage
+	Cost         = agentcore.Cost
 	ChatModel    = agentcore.ChatModel
 	CallOption   = agentcore.CallOption
 	CallConfig   = agentcore.CallConfig

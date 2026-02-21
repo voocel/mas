@@ -41,6 +41,7 @@ type Agent struct {
 	getApiKey         func(provider string) (string, error)
 	thinkingBudgets   map[ThinkingLevel]int
 	sessionID         string
+	middlewares       []ToolMiddleware
 
 	// State
 	messages         []AgentMessage
@@ -385,6 +386,7 @@ func (a *Agent) buildConfig() LoopConfig {
 			defer a.mu.Unlock()
 			return dequeue(&a.followUpQ, a.followUpMode)
 		},
+		Middlewares: a.middlewares,
 	}
 }
 

@@ -108,6 +108,12 @@ func WithSessionID(id string) AgentOption {
 	return func(a *Agent) { a.sessionID = id }
 }
 
+// WithMiddlewares sets tool execution middlewares.
+// Each middleware wraps the tool.Execute call. First middleware is outermost.
+func WithMiddlewares(mw ...ToolMiddleware) AgentOption {
+	return func(a *Agent) { a.middlewares = mw }
+}
+
 // WithContextPipeline sets both TransformContext and ConvertToLLM in one call.
 // This is the recommended way to configure context compaction:
 //
